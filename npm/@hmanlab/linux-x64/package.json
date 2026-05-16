@@ -1,0 +1,19 @@
+{
+  "name": "@hmanlab/linux-x64",
+  "version": "0.2.0",
+  "description": "Prebuilt hmanlab binary for linux-x64. Pulled in automatically by the `hmanlab` package.",
+  "homepage": "https://github.com/rekabytes/hmanlab",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rekabytes/hmanlab.git"
+  },
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "bin": {
+    "hmanlab": "bin/hmanlab"
+  },
+  "files": [
+    "bin/hmanlab"
+  ]
+}

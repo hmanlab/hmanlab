@@ -1,0 +1,20 @@
+/target
+Cargo.lock.bak
+*.swp
+*.swo
+.DS_Store
+.env
+.env.local
+
+# hmanlab runtime artifacts — project-scope memory and compaction
+# snapshots written by the agent at runtime. Never commit these; they
+# contain conversation history private to the user.
+.hmanlab/
+
+# npm packaging — prebuilt binaries are produced by CI (release.yml) and
+# staged into npm/@hmanlab/*/bin/ for the publish step. They should never
+# be committed; .gitkeep keeps the empty dirs tracked.
+npm/@hmanlab/*/bin/hmanlab
+npm/@hmanlab/*/bin/hmanlab.exe
+# Local `scripts/npm-local.sh pack` drops tarballs here.
+/dist/

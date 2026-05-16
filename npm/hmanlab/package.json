@@ -1,0 +1,41 @@
+{
+  "name": "hmanlab",
+  "version": "0.2.0",
+  "description": "hmanlab — a terminal UI for chatting with Ollama, z.ai, Ollama Cloud, and OpenCode Go from your shell.",
+  "keywords": [
+    "ai",
+    "agent",
+    "ollama",
+    "tui",
+    "terminal",
+    "rust",
+    "llm"
+  ],
+  "homepage": "https://github.com/rekabytes/hmanlab",
+  "bugs": {
+    "url": "https://github.com/rekabytes/hmanlab/issues"
+  },
+  "license": "MIT",
+  "author": "rekabytes <hello@rekabytes.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rekabytes/hmanlab.git"
+  },
+  "bin": {
+    "hmanlab": "bin/hmanlab.js"
+  },
+  "files": [
+    "bin/hmanlab.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@hmanlab/linux-x64": "0.2.0",
+    "@hmanlab/linux-arm64": "0.2.0",
+    "@hmanlab/darwin-x64": "0.2.0",
+    "@hmanlab/darwin-arm64": "0.2.0",
+    "@hmanlab/win32-x64": "0.2.0"
+  }
+}

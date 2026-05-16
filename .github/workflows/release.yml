@@ -1,0 +1,148 @@
+name: release
+
+# Triggered by pushing a `v*` tag. Builds the Rust binary for every
+# supported (OS, arch), drops each one into the matching
+# `npm/@hmanlab/<plat>-<arch>/bin/` directory, then publishes every
+# subpackage and the umbrella to npm. The publish step is skipped when
+# `NPM_TOKEN` is missing so forks can still build artifacts.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow a manual rerun from the Actions tab without retagging.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            pkg: linux-x64
+            cross: true
+            binary: hmanlab
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            pkg: linux-arm64
+            cross: true
+            binary: hmanlab
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            pkg: darwin-x64
+            cross: false
+            binary: hmanlab
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            pkg: darwin-arm64
+            cross: false
+            binary: hmanlab
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            pkg: win32-x64
+            cross: false
+            binary: hmanlab.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install cross (Linux only)
+        if: matrix.cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage binary into npm subpackage
+        shell: bash
+        run: |
+          mkdir -p "npm/@hmanlab/${{ matrix.pkg }}/bin"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+             "npm/@hmanlab/${{ matrix.pkg }}/bin/${{ matrix.binary }}"
+          chmod +x "npm/@hmanlab/${{ matrix.pkg }}/bin/${{ matrix.binary }}" || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmanlab-${{ matrix.pkg }}
+          path: npm/@hmanlab/${{ matrix.pkg }}/bin/${{ matrix.binary }}
+          if-no-files-found: error
+
+  publish:
+    name: publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip publish on workflow_dispatch (manual rebuilds) and on forks
+    # that haven't configured NPM_TOKEN — but always run the build matrix.
+    if: github.event_name == 'push' && github.repository_owner == 'rekabytes'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage artifacts into npm tree
+        shell: bash
+        run: |
+          for pkg in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            mkdir -p "npm/@hmanlab/$pkg/bin"
+            cp "artifacts/hmanlab-$pkg/hmanlab" "npm/@hmanlab/$pkg/bin/hmanlab"
+            chmod +x "npm/@hmanlab/$pkg/bin/hmanlab"
+          done
+          mkdir -p "npm/@hmanlab/win32-x64/bin"
+          cp "artifacts/hmanlab-win32-x64/hmanlab.exe" "npm/@hmanlab/win32-x64/bin/hmanlab.exe"
+
+      - name: Sanity-check binaries
+        shell: bash
+        run: |
+          ls -la npm/@hmanlab/*/bin/
+          file npm/@hmanlab/linux-x64/bin/hmanlab || true
+
+      - name: Publish subpackages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for pkg in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
+            echo "::group::publish @hmanlab/$pkg"
+            (cd "npm/@hmanlab/$pkg" && npm publish --access public --provenance)
+            echo "::endgroup::"
+          done
+
+      - name: Publish umbrella
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd npm/hmanlab && npm publish --access public --provenance

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/rekabytes/hmanlab/security/advisories/new
+    about: Report security issues privately — see SECURITY.md for the full policy.
+  - name: Question or discussion
+    url: https://github.com/rekabytes/hmanlab/discussions
+    about: For open-ended questions, ideas, or "how do I…" threads.
