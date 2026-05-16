@@ -20,6 +20,10 @@ jobs:
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    # softprops/action-gh-release writes assets to the Release that
+    # triggered the workflow — needs contents:write on the per-job token.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +101,27 @@ jobs:
           path: npm/@hmanlab/${{ matrix.pkg }}/bin/${{ matrix.binary }}
           if-no-files-found: error
 
+      # When the workflow was fired by a GitHub Release, also attach the
+      # binary to that Release so `curl -fsSL .../install.sh | sh` can
+      # fetch it via the predictable `releases/latest/download/<asset>`
+      # URL. We rename with the platform suffix so each asset is unique.
+      - name: Stage release asset
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          if [[ "${{ matrix.binary }}" == "hmanlab.exe" ]]; then
+            cp "target/${{ matrix.target }}/release/hmanlab.exe" "hmanlab-${{ matrix.pkg }}.exe"
+          else
+            cp "target/${{ matrix.target }}/release/hmanlab" "hmanlab-${{ matrix.pkg }}"
+          fi
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: hmanlab-${{ matrix.pkg }}*
+          fail_on_unmatched_files: true
+
   publish:
     name: publish to npm
     needs: build
@@ -105,13 +130,25 @@ jobs:
     # write access on the id-token permission. contents:read is the
     # bare minimum to checkout the repo.
     permissions:
-      contents: read
+      # contents:write — softprops/action-gh-release uploads install.sh
+      #   as a Release asset so curl-from-releases/latest works.
+      # id-token:write — npm publish --provenance mints a GitHub OIDC token.
+      contents: write
       id-token: write
     # Skip publish on workflow_dispatch (manual rebuilds) and on forks
     # that haven't configured NPM_TOKEN — but always run the build matrix.
     if: github.event_name == 'release' && github.repository_owner == 'rekabytes'
     steps:
       - uses: actions/checkout@v4
+
+      # Upload install.sh as a Release asset so the curl one-liner
+      # (`curl … releases/latest/download/install.sh | sh`) works.
+      - name: Upload install.sh to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: install.sh
+          fail_on_unmatched_files: true
 
       - name: Set up Node
         uses: actions/setup-node@v4

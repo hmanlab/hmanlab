@@ -37,6 +37,14 @@ hmanlab is local-first. Your secrets and your conversation stay on your machine:
 
 ## Install
 
+### One-liner (Linux & macOS)
+
+```bash
+curl -fsSL https://github.com/rekabytes/hmanlab/releases/latest/download/install.sh | sh
+```
+
+Detects your OS+arch, downloads the matching binary from the latest GitHub Release, and installs it to `~/.local/bin/hmanlab`. No Node required. Pass `HMANLAB_INSTALL_DIR=/usr/local/bin sh` to override the install location.
+
 ### From npm (recommended)
 
 Prebuilt binaries are published for `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, and `win32-x64`.
