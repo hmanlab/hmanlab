@@ -58,15 +58,15 @@ jobs:
             cross: false
             binary: hmanlab.exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable @ 2026-05
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.cargo/registry
@@ -95,7 +95,7 @@ jobs:
           chmod +x "npm/@hmanlab/${{ matrix.pkg }}/bin/${{ matrix.binary }}" || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: hmanlab-${{ matrix.pkg }}
           path: npm/@hmanlab/${{ matrix.pkg }}/bin/${{ matrix.binary }}
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload to GitHub Release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: hmanlab-${{ matrix.pkg }}*
           fail_on_unmatched_files: true
@@ -139,25 +139,31 @@ jobs:
     # that haven't configured NPM_TOKEN — but always run the build matrix.
     if: github.event_name == 'release' && github.repository_owner == 'rekabytes'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       # Upload install.sh as a Release asset so the curl one-liner
       # (`curl … releases/latest/download/install.sh | sh`) works.
       - name: Upload install.sh to GitHub Release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: install.sh
           fail_on_unmatched_files: true
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Upgrade npm for trusted publishing
+        # OIDC trusted publishing requires npm >= 11.5. The npm bundled
+        # with setup-node@v4 + node 20 is older, so pin to a known-good
+        # version explicitly.
+        run: npm install -g npm@latest
+
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
 
@@ -179,8 +185,10 @@ jobs:
           file npm/@hmanlab/linux-x64/bin/hmanlab || true
 
       - name: Publish subpackages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # No NODE_AUTH_TOKEN: this uses npm OIDC trusted publishing.
+        # The `id-token: write` permission above lets npm mint a short-
+        # lived token from the GitHub OIDC issuer. The Trusted Publisher
+        # entry on npmjs.com (repo + workflow filename) authorises it.
         run: |
           # Idempotent + retry-on-409. npm's packument index is eventually
           # consistent: publishing several packages back-to-back can race
@@ -216,8 +224,7 @@ jobs:
           done
 
       - name: Publish umbrella
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # OIDC trusted publishing — see the subpackages step above.
         run: |
           cd npm/hmanlab
           pkg_version=$(node -p "require('./package.json').version")

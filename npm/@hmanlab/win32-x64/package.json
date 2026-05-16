@@ -1,6 +1,6 @@
 {
   "name": "@hmanlab/win32-x64",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Prebuilt hmanlab binary for win32-x64. Pulled in automatically by the `hmanlab` package.",
   "homepage": "https://github.com/rekabytes/hmanlab",
   "license": "MIT",
@@ -14,6 +14,8 @@
     "hmanlab": "bin/hmanlab.exe"
   },
   "files": [
-    "bin/hmanlab.exe"
+    "bin/hmanlab.exe",
+    "README.md",
+    "LICENSE"
   ]
 }

@@ -1,0 +1,65 @@
+name: scorecard
+
+# OpenSSF Scorecard — supply-chain health check. Runs weekly + on every
+# push to the default branch + whenever branch protection changes.
+# Results land in:
+#   - GitHub Security tab (SARIF upload)
+#   - the public Scorecard dataset at https://securityscorecards.dev,
+#     which Socket.dev reads when computing its Supply Chain score.
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Weekly, Monday 06:00 UTC. Stagger off the round hour to avoid the
+    # OpenSSF data-collection rush.
+    - cron: '13 6 * * 1'
+  push:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # security-events: write — upload SARIF to the Security tab
+      # id-token:        write — publish results to the OpenSSF dataset
+      #                          (required when publish_results: true)
+      # actions:         read  — Scorecard inspects workflow files
+      # contents:        read  — checkout
+      security-events: write
+      id-token: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Scorecard reads workflow files directly; it does not need
+          # write credentials, and persist-credentials: false hardens
+          # the job against credential theft.
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a  # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publish to the public OpenSSF dataset so Socket.dev and other
+          # downstream consumers can read this repo's score. Requires
+          # id-token: write above.
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3
+        with:
+          sarif_file: results.sarif

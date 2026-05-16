@@ -17,15 +17,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable @ 2026-05
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.cargo/registry
@@ -46,7 +46,7 @@ jobs:
         run: cargo build --release
 
       - name: cargo audit
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998  # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Fail only on real vulnerabilities. Informational advisories
@@ -54,3 +54,26 @@ jobs:
           # check summary but don't block the PR — they're often
           # transitive deps we can't fix in this repo.
           denyWarnings: false
+
+  # Smoke-tests the npm shim (bin/hmanlab.js) on every host OS. The shim
+  # has no runtime deps, so we skip `npm install` and exercise the
+  # "no prebuilt binary" error path directly — matches what a user on an
+  # unsupported platform sees.
+  node-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '20'
+
+      - name: Run smoke test
+        shell: bash
+        working-directory: npm/hmanlab
+        run: npm test
