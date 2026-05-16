@@ -198,13 +198,13 @@ fn parse_memory_file(path: &Path) -> Option<MemoryFile> {
 
 fn split_frontmatter(raw: &str) -> Option<(&str, &str)> {
     let s = raw.trim_start_matches('\u{FEFF}'); // strip BOM if any
-    let s = s.trim_start_matches(|c: char| c == '\n' || c == '\r' || c == ' ');
+    let s = s.trim_start_matches(['\n', '\r', ' ']);
     let s = s.strip_prefix("---")?;
-    let s = s.trim_start_matches(|c: char| c == '\n' || c == '\r');
+    let s = s.trim_start_matches(['\n', '\r']);
     let end = s.find("\n---")?;
     let fm = &s[..end];
     let body = &s[end + "\n---".len()..];
-    let body = body.trim_start_matches(|c: char| c == '\n' || c == '\r');
+    let body = body.trim_start_matches(['\n', '\r']);
     Some((fm, body))
 }
 

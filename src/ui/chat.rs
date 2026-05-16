@@ -280,10 +280,10 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
             }
         }
 
-        let trimmed = visible_content.trim_end_matches(|c: char| c == '\n' || c == '\r');
+        let trimmed = visible_content.trim_end_matches(['\n', '\r']);
 
         // Render body, unless this is a collapsed tool.
-        let show_body = !(is_tool && !tool_expanded);
+        let show_body = !is_tool || tool_expanded;
         if show_body {
             if trimmed.trim().is_empty() {
                 if msg.role == "assistant"
@@ -449,7 +449,7 @@ pub(super) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
 /// branch renders progress without leaking raw thoughts. Once generation
 /// finishes without ever emitting `</think>`, we fall back to treating the
 /// whole content as visible (legacy / non-reasoning models).
-fn split_thinking<'a>(s: &'a str, generating: bool) -> (Option<&'a str>, &'a str) {
+fn split_thinking(s: &str, generating: bool) -> (Option<&str>, &str) {
     const CLOSE: &str = "</think>";
     const OPEN: &str = "<think>";
     if let Some(idx) = s.find(CLOSE) {
@@ -461,7 +461,7 @@ fn split_thinking<'a>(s: &'a str, generating: bool) -> (Option<&'a str>, &'a str
             .trim_start_matches(OPEN)
             .trim_matches(|c: char| c == '\n' || c == '\r' || c == ' ');
         let after = &s[idx + CLOSE.len()..];
-        let visible = after.trim_start_matches(|c: char| c == '\n' || c == '\r');
+        let visible = after.trim_start_matches(['\n', '\r']);
         if trimmed_think.is_empty() {
             (None, visible)
         } else {

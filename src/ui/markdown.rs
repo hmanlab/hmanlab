@@ -146,7 +146,7 @@ pub(super) fn wrap_styled_segments(
         }
     }
 
-    if lines.last().map_or(false, |l| l.is_empty()) && lines.len() > 1 {
+    if lines.last().is_some_and(|l| l.is_empty()) && lines.len() > 1 {
         lines.pop();
     }
     lines

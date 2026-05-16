@@ -103,10 +103,8 @@ impl App {
                 self.sel_end = Some((m.column, m.row));
                 self.selecting = true;
             }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                if self.selecting {
-                    self.sel_end = Some((m.column, m.row));
-                }
+            MouseEventKind::Drag(MouseButton::Left) if self.selecting => {
+                self.sel_end = Some((m.column, m.row));
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 if !self.selecting {
@@ -188,9 +186,14 @@ impl App {
             .find(|(row, _, _)| *row == logical_y)
             .map(|(_, path, is_dir)| (path.clone(), *is_dir));
         match hit {
+            // Toggle expand/collapse. The next render uses the updated
+            // set; the walker re-builds the tree from scratch each frame.
+            // Collapsing the inner `if` into a match guard would push the
+            // side-effecting `remove` into the guard expression AND force
+            // an extra catch-all arm to keep exhaustiveness, so allow the
+            // lint here.
+            #[allow(clippy::collapsible_match)]
             Some((path, true)) => {
-                // Toggle expand/collapse. The next render uses the updated
-                // set; the walker re-builds the tree from scratch each frame.
                 if !self.expanded_dirs.remove(&path) {
                     self.expanded_dirs.insert(path);
                 }
@@ -252,10 +255,8 @@ impl App {
         for &(idx, ls, le) in &self.message_line_ranges {
             if logical_y >= ls && logical_y < le {
                 if let Some(msg) = self.messages.get(idx) {
-                    if msg.role == "tool" {
-                        if !self.expanded_tools.remove(&idx) {
-                            self.expanded_tools.insert(idx);
-                        }
+                    if msg.role == "tool" && !self.expanded_tools.remove(&idx) {
+                        self.expanded_tools.insert(idx);
                     }
                 }
                 return;
@@ -318,7 +319,7 @@ impl App {
             };
             lines_out.push(piece.trim_end().to_string());
         }
-        while lines_out.last().map_or(false, |l| l.is_empty()) {
+        while lines_out.last().is_some_and(|l| l.is_empty()) {
             lines_out.pop();
         }
         let buf: String = lines_out.join("\n");
@@ -374,15 +375,13 @@ impl App {
                 self.mode = Mode::Chat;
                 self.status = "Cancelled".into();
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.session_picker_index > 0 {
-                    self.session_picker_index -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') if self.session_picker_index > 0 => {
+                self.session_picker_index -= 1;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.session_picker_index + 1 < self.session_picker_items.len() {
-                    self.session_picker_index += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.session_picker_index + 1 < self.session_picker_items.len() =>
+            {
+                self.session_picker_index += 1;
             }
             KeyCode::Enter => {
                 if let Some(s) = self
@@ -404,15 +403,13 @@ impl App {
     fn handle_picker(&mut self, key: KeyEvent) -> AppAction {
         match key.code {
             KeyCode::Esc => self.mode = Mode::Chat,
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.picker_index > 0 {
-                    self.picker_index -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') if self.picker_index > 0 => {
+                self.picker_index -= 1;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.picker_index + 1 < self.picker_entries.len() {
-                    self.picker_index += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.picker_index + 1 < self.picker_entries.len() =>
+            {
+                self.picker_index += 1;
             }
             KeyCode::Enter => {
                 if let Some(entry) = self.picker_entries.get(self.picker_index).cloned() {
@@ -681,7 +678,7 @@ impl App {
             .position(|e| match e {
                 PickerEntry::Ollama(n) => active_provider.is_none() && n == &self.model,
                 PickerEntry::Extra(m) => {
-                    active_provider.map_or(false, |p| p == m.provider) && m.name == self.model
+                    active_provider.is_some_and(|p| p == m.provider) && m.name == self.model
                 }
                 PickerEntry::AddZaiSubscription
                 | PickerEntry::AddZaiUsage
@@ -1481,15 +1478,13 @@ impl App {
                 self.mode = Mode::Chat;
                 self.status = "Disconnect cancelled".into();
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.disconnect_index > 0 {
-                    self.disconnect_index -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') if self.disconnect_index > 0 => {
+                self.disconnect_index -= 1;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.disconnect_index + 1 < self.disconnect_entries.len() {
-                    self.disconnect_index += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.disconnect_index + 1 < self.disconnect_entries.len() =>
+            {
+                self.disconnect_index += 1;
             }
             KeyCode::Home => self.disconnect_index = 0,
             KeyCode::End => {

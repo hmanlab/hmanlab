@@ -19,9 +19,7 @@ fn compact_description(summary: &str) -> String {
         if trimmed.is_empty() {
             continue;
         }
-        let cleaned = trimmed
-            .trim_start_matches(|c: char| matches!(c, '-' | '*' | '•'))
-            .trim();
+        let cleaned = trimmed.trim_start_matches(['-', '*', '•']).trim();
         if !cleaned.is_empty() {
             picked = cleaned.replace(['\r', '\n'], " ");
             break;
@@ -349,7 +347,7 @@ impl App {
                         ..Default::default()
                     })
                     .collect();
-                prepend.extend(self.messages.drain(..));
+                prepend.append(&mut self.messages);
                 self.messages = prepend;
                 self.follow = false;
                 self.scroll = 0;
@@ -379,7 +377,7 @@ impl App {
                 let raw = &last.content;
                 let content = match raw.find("</think>") {
                     Some(idx) => raw[idx + "</think>".len()..]
-                        .trim_start_matches(|c: char| c == '\n' || c == '\r')
+                        .trim_start_matches(['\n', '\r'])
                         .to_string(),
                     None => raw.clone(),
                 };

@@ -46,7 +46,7 @@ pub async fn agent_loop(
         content: tools::system_prompt(&workspace),
         ..Default::default()
     }];
-    full_history.extend(history.into_iter());
+    full_history.extend(history);
 
     for _ in 0..MAX_TURNS {
         let stream_res = match &backend {
