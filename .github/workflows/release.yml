@@ -145,14 +145,57 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # Idempotent + retry-on-409. npm's packument index is eventually
+          # consistent: publishing several packages back-to-back can race
+          # and yield 409 "Failed to save packument" on the next one even
+          # though the previous succeeded. We retry with backoff and skip
+          # versions already on the registry so a partial-failure re-run
+          # picks up where it left off.
           for pkg in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
             echo "::group::publish @hmanlab/$pkg"
-            (cd "npm/@hmanlab/$pkg" && npm publish --access public --provenance)
+            (
+              cd "npm/@hmanlab/$pkg"
+              pkg_name="@hmanlab/$pkg"
+              pkg_version=$(node -p "require('./package.json').version")
+              if npm view "${pkg_name}@${pkg_version}" version 2>/dev/null | grep -qx "${pkg_version}"; then
+                echo "✓ ${pkg_name}@${pkg_version} already published, skipping"
+                exit 0
+              fi
+              for attempt in 1 2 3; do
+                if npm publish --access public --provenance; then
+                  exit 0
+                fi
+                if [ "$attempt" -lt 3 ]; then
+                  echo "attempt $attempt failed, retrying in 15s..."
+                  sleep 15
+                fi
+              done
+              echo "publish of ${pkg_name}@${pkg_version} failed after 3 attempts" >&2
+              exit 1
+            )
             echo "::endgroup::"
+            # Small inter-publish delay reduces packument-race likelihood.
+            sleep 3
           done
 
       - name: Publish umbrella
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          cd npm/hmanlab && npm publish --access public --provenance
+          cd npm/hmanlab
+          pkg_version=$(node -p "require('./package.json').version")
+          if npm view "hmanlab@${pkg_version}" version 2>/dev/null | grep -qx "${pkg_version}"; then
+            echo "✓ hmanlab@${pkg_version} already published, skipping"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            if npm publish --access public --provenance; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "attempt $attempt failed, retrying in 15s..."
+              sleep 15
+            fi
+          done
+          echo "publish of hmanlab@${pkg_version} failed after 3 attempts" >&2
+          exit 1
