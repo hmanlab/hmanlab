@@ -14,7 +14,7 @@ keywords = ["tui", "ollama", "llm", "ratatui", "agent"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "io-util", "process", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
