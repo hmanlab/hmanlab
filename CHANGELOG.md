@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-17
+
+### Added
+- Subpackage `README.md` + `LICENSE` for each `@hmanlab/<plat>` artifact, so `npmjs.com` and Socket can render docs and license info per-platform.
+- `npm test` smoke check for `bin/hmanlab.js` (asserts the "no prebuilt binary" error path) and a `node-smoke` CI job on ubuntu/macos/windows.
+- OpenSSF Scorecard workflow (`.github/workflows/scorecard.yml`) — weekly + on push to `main` + on branch-protection-rule changes; publishes results to the public dataset Socket reads.
+
+### Changed
+- **Supply chain — `npm publish` now uses OIDC trusted publishing.** The `release.yml` `publish` job no longer reads `NPM_TOKEN`; npm mints a short-lived token via GitHub's OIDC issuer, authorised by the Trusted Publisher entry on npmjs.com. Requires the `NPM_TOKEN` secret to be deleted from the repo once a release publishes green.
+- Pinned every GitHub Action in `ci.yml` and `release.yml` to a commit SHA (with the human-readable version as a comment). Stops tag-based supply-chain attacks on the build/publish pipeline.
+- Backfilled `0.1.1` / `0.1.2` / `0.1.3` entries above.
+
+## [0.1.3] - 2026-05-16
+
+### Changed
+- UI redesign: Catppuccin Mocha palette applied across the TUI.
+- README restructured with a centered hero, grouped sections, and collapsible details.
+
+### Added
+- Slash-command autocomplete and `@`-file autocomplete in the input box.
+
+## [0.1.2] - 2026-05-16
+
+### Added
+- One-line curl installer (`curl -fsSL …/install.sh | sh`) and per-platform binaries attached to GitHub Releases.
+
+### Fixed
+- Release publish is now idempotent and retries on the npm packument race (409 "Failed to save packument") so a partial-failure re-run picks up where it left off.
+
+## [0.1.1] - 2026-05-16
+
+### Fixed
+- Release workflow now fires on Release **publish**, not on bare tag push — lets you draft notes before kicking off the build + npm publish pipeline.
+
 ## [0.1.0] - 2026-05-16
 
 ### Added
@@ -24,5 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run wizard for Ollama URL + hmanlab-api key, saved to `~/.config/hmanlab/config.json` (mode 600).
 - npm packaging via the per-arch optional-dependency pattern: umbrella `hmanlab` + `@hmanlab/{linux-x64,linux-arm64,darwin-x64,darwin-arm64,win32-x64}`.
 
-[Unreleased]: https://github.com/rekabytes/hmanlab/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rekabytes/hmanlab/compare/0.1.4...HEAD
+[0.1.4]: https://github.com/rekabytes/hmanlab/compare/0.1.3...0.1.4
+[0.1.3]: https://github.com/rekabytes/hmanlab/compare/0.1.2...0.1.3
+[0.1.2]: https://github.com/rekabytes/hmanlab/compare/0.1.1...0.1.2
+[0.1.1]: https://github.com/rekabytes/hmanlab/compare/v0.1.0...0.1.1
 [0.1.0]: https://github.com/rekabytes/hmanlab/releases/tag/v0.1.0
