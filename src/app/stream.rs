@@ -252,6 +252,27 @@ impl App {
             StreamMsg::UpdateAvailable(latest) => {
                 self.update_available = Some(latest);
             }
+            StreamMsg::UpdateInfo(text) => {
+                self.push_info(text);
+            }
+            StreamMsg::Settings(text) => {
+                self.push_info(text);
+                self.status = "Settings loaded".into();
+            }
+            StreamMsg::UpdateResult { ok, text } => {
+                self.push_info(text);
+                self.status = if ok {
+                    "Update finished — restart hmanlab to use the new version".into()
+                } else {
+                    "Update failed".into()
+                };
+                if ok {
+                    // Clear the header notice: whatever version was advertised
+                    // has now been installed, even if we can't detect the new
+                    // version until the user restarts.
+                    self.update_available = None;
+                }
+            }
             StreamMsg::Models { models, base } => {
                 let n = models.len();
                 self.models = models;

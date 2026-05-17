@@ -59,6 +59,27 @@ struct MessageEnvelope {
     message: Message,
 }
 
+/// The account-info payload returned by `GET /v1/auth/me`. The same shape
+/// is accepted whether the bearer is an API key (`bai_*`) or a web
+/// session token, so the TUI uses this to introspect "who am I" given
+/// only its stored API key — handy for `/settings`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Me {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub email: String,
+    #[serde(default)]
+    pub training_opt_in: bool,
+    #[serde(default)]
+    pub is_admin: bool,
+}
+
+#[derive(Deserialize)]
+struct MeEnvelope {
+    user: Me,
+}
+
 /// Thin async wrapper around the hmanlab-api HTTP API.
 #[derive(Clone)]
 pub struct Client {
@@ -94,6 +115,24 @@ impl Client {
             bail!("auth check failed ({})", resp.status());
         }
         Ok(())
+    }
+
+    /// Fetch the authenticated user's profile via `GET /v1/auth/me`.
+    /// Differs from `check_auth` only in that it returns the parsed body
+    /// — the TUI uses it for `/settings`. Errors bubble up verbatim so
+    /// the caller can show the user a real diagnostic.
+    pub async fn fetch_me(&self) -> Result<Me> {
+        let url = format!("{}/v1/auth/me", self.base);
+        let env: MeEnvelope = self
+            .http
+            .get(&url)
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(env.user)
     }
 
     pub async fn create_session(&self, model: &str) -> Result<Session> {

@@ -134,6 +134,19 @@ pub enum StreamMsg {
     /// Background update check found a newer hmanlab on npm. Renders
     /// as a one-line notice in the header — never blocks anything.
     UpdateAvailable(String),
+    /// `/update` finished. `ok` is the exit status; `text` is the
+    /// message to surface inline (success summary or failure cause).
+    UpdateResult {
+        ok: bool,
+        text: String,
+    },
+    /// `/update` interim progress line (e.g., "0.1.4 → 0.1.5, installing…").
+    /// Pushed to the chat as an info message so the user can see what
+    /// the background task is doing without blocking.
+    UpdateInfo(String),
+    /// `/settings` finished gathering account + version info. The text
+    /// is a pre-formatted multi-line block ready to render verbatim.
+    Settings(String),
     /// Begin executing a tool.
     ToolStart {
         name: String,

@@ -55,6 +55,13 @@ pub async fn check() -> Option<String> {
 }
 
 async fn fetch_latest() -> Result<String> {
+    fetch_latest_npm().await
+}
+
+/// Same registry round-trip as the background check, but exposed so
+/// the `/update` and `/settings` commands can run their own fresh
+/// look-up without going through the 24 h cache.
+pub async fn fetch_latest_npm() -> Result<String> {
     let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?;
     let resp: RegistryResponse = client
         .get(REGISTRY_URL)
@@ -64,6 +71,12 @@ async fn fetch_latest() -> Result<String> {
         .json()
         .await?;
     Ok(resp.dist_tags.latest)
+}
+
+/// Public re-export of the internal newer-than check so `/update` can
+/// reuse the same semver-tolerant comparison as the background notice.
+pub fn newer(current: &str, latest: &str) -> bool {
+    cmp_semver(current, latest).is_lt()
 }
 
 fn cache_path() -> Option<PathBuf> {

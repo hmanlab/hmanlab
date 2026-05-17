@@ -1,6 +1,6 @@
 {
   "name": "@hmanlab/darwin-x64",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Prebuilt hmanlab binary for darwin-x64 (Intel Mac). Pulled in automatically by the `hmanlab` package.",
   "homepage": "https://github.com/rekabytes/hmanlab",
   "license": "MIT",

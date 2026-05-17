@@ -54,14 +54,36 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 
 ## Install
 
-| Method | Command | Notes |
+| Method | Command | Binary location |
 |---|---|---|
-| **Curl** | `curl -fsSL https://github.com/rekabytes/hmanlab/releases/latest/download/install.sh \| sh` | Linux + macOS. Drops binary in `~/.local/bin/hmanlab`. No Node needed. |
-| **npm (global)** | `npm i -g hmanlab` | `hmanlab` on PATH everywhere. Per-arch binary; ~5 MB total. |
-| **npm (one-off)** | `npx hmanlab` | Run without installing. |
-| **From source** | `cargo install --git https://github.com/rekabytes/hmanlab` | Needs Rust 1.74+. Builds locally. |
+| **Curl** | `curl -fsSL https://github.com/rekabytes/hmanlab/releases/latest/download/install.sh \| sh` | `~/.local/bin/hmanlab` |
+| **npm (global)** | `npm i -g hmanlab` | `$(npm root -g)/../bin/hmanlab` |
+| **npm (one-off)** | `npx hmanlab` | (no install) |
+| **From source** | `cargo install --git https://github.com/rekabytes/hmanlab` | `~/.cargo/bin/hmanlab` |
 
 Prebuilt binaries cover `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, and `win32-x64`. Windows users: use the npm path — the curl installer is POSIX-only.
+
+> **Pick one install method per machine and stick with it.** Each channel drops the binary in its own directory; if you install via curl and later run `npm i -g hmanlab`, both binaries exist and your `PATH` decides which one runs. Mixing channels is the most common reason "updates don't take effect." See [Updating](#updating) below.
+
+---
+
+## Updating
+
+The right update command depends on **how you installed**. Check first:
+
+```bash
+which hmanlab
+```
+
+| If `which` points to… | You installed via… | Update with |
+|---|---|---|
+| `~/.local/bin/hmanlab` | curl installer | re-run the curl command above |
+| `<npm prefix>/bin/hmanlab` | npm | `npm install -g hmanlab@latest` |
+| `~/.cargo/bin/hmanlab` | cargo | `cargo install hmanlab --force` |
+
+From inside the running TUI you can also type `/update` — it detects cargo installs and prints the right `cargo install --force` hint, otherwise it shells out to `npm install -g hmanlab@latest`. (If you originally installed via curl, `/update` will install a *second* binary via npm; the curl one stays put. Re-running the curl script is the cleanest fix.)
+
+`/update` checks the npm registry first and tells you whether a newer version actually exists before doing anything.
 
 ---
 
@@ -120,8 +142,10 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `/workspace <path>` | Change agent workspace |
 | `/compact` | Manually compact conversation history |
 | `/disconnect` | Remove a BYOK provider and its models |
+| `/settings`, `/whoami` | Show your account, version, and configured providers |
+| `/update` | Check the npm registry and update to the latest release |
 | `/clear` | Clear visible chat (session keeps going) |
-| `/quit`, `/exit` | Quit (`Esc`) |
+| `/quit`, `/exit` | Quit (also `Ctrl+Q` or `Ctrl+C` when idle) |
 
 </details>
 
@@ -136,8 +160,9 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `Ctrl+M` | Open model picker |
 | `Ctrl+T` | Fold/unfold all tool blocks and thinking blocks |
 | `Ctrl+C` | Cancel generation (or quit when idle) |
+| `Ctrl+Q` | Quit |
 | `Ctrl+L` | Clear chat history |
-| `Esc` | Quit (or close viewer/sidebar popup) |
+| `Esc` | Interrupt generation, clear draft input, or close viewer/popup |
 | `Mouse wheel` | Scroll chat |
 | `Drag` | Select text; release copies to clipboard (OSC 52) |
 | `Click` on tool block | Toggle fold |

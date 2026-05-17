@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-05-17
+
+### Added
+- `/update` slash command — checks the npm registry for the latest published version, prints `current → latest`, and runs `npm install -g hmanlab@latest` in the background so you can keep chatting while it installs. Detects cargo installs (binary under `~/.cargo/bin` or `target/`) and surfaces `cargo install hmanlab --force` instead. Reports a clean fallback when `npm` isn't on `PATH`.
+- `/settings` slash command (aliases: `/whoami`, `/account`, `/me`) — shows the running version (with an upgrade hint if npm has a newer one), active model, Ollama host, configured BYOK providers (presence only — never the key), workspace, and your authenticated account (name, email, training opt-in, admin badge) fetched from `/v1/auth/me`.
+- `api::Client::fetch_me()` and a public `Me` struct in `src/api.rs` for the account look-up.
+- Public `update_check::fetch_latest_npm()` and `update_check::newer()` so other modules can run a fresh registry check without going through the 24 h startup cache.
+
+### Changed
+- **`Esc` no longer quits.** In chat mode it now interrupts an in-flight generation (same effect as `Ctrl+C` mid-stream), or clears the draft input and dismisses any open `/`/`@` autocomplete popup, or no-ops. Quit is `Ctrl+C` (when idle), `Ctrl+Q`, `/quit`, or `/exit`.
+- `README.md` install table now shows each method's exact binary location (`~/.local/bin/hmanlab`, `$(npm root -g)/../bin/hmanlab`, `~/.cargo/bin/hmanlab`) and warns against mixing channels — the most common cause of "update doesn't take effect."
+- New `README.md` **Updating** section: a `which hmanlab` → command lookup table so users always know the right update path for their install, and explicit notes on `/update`'s curl-install limitation.
+- `README.md` slash-commands and key-bindings tables refreshed to cover `/update`, `/settings`, the new `Esc` behavior, and `Ctrl+Q`.
+
 ## [0.1.4] - 2026-05-17
 
 ### Added
@@ -56,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run wizard for Ollama URL + hmanlab-api key, saved to `~/.config/hmanlab/config.json` (mode 600).
 - npm packaging via the per-arch optional-dependency pattern: umbrella `hmanlab` + `@hmanlab/{linux-x64,linux-arm64,darwin-x64,darwin-arm64,win32-x64}`.
 
+[0.1.5]: https://github.com/rekabytes/hmanlab/compare/0.1.4...0.1.5
 [0.1.4]: https://github.com/rekabytes/hmanlab/compare/0.1.3...0.1.4
 [0.1.3]: https://github.com/rekabytes/hmanlab/compare/0.1.2...0.1.3
 [0.1.2]: https://github.com/rekabytes/hmanlab/compare/0.1.1...0.1.2

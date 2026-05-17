@@ -74,6 +74,14 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         desc: "clear visible chat",
     },
     SlashCommand {
+        name: "settings",
+        desc: "show account, version, and configured providers",
+    },
+    SlashCommand {
+        name: "update",
+        desc: "update hmanlab to the latest npm release",
+    },
+    SlashCommand {
         name: "quit",
         desc: "quit hmanlab",
     },

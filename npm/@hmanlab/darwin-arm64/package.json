@@ -1,6 +1,6 @@
 {
   "name": "@hmanlab/darwin-arm64",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Prebuilt hmanlab binary for darwin-arm64 (Apple Silicon). Pulled in automatically by the `hmanlab` package.",
   "homepage": "https://github.com/rekabytes/hmanlab",
   "license": "MIT",

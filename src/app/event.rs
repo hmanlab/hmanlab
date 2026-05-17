@@ -35,7 +35,25 @@ enum Command {
     Workspace(String),
     Compact,
     Disconnect(String),
+    Update,
+    Settings,
     Unknown(String),
+}
+
+/// If the current binary's path looks like a cargo-managed install,
+/// return a short identifier (the matched path fragment) so `/update`
+/// can suggest the right upgrade channel instead of running npm.
+fn cargo_install_hint() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let s = exe.to_string_lossy().to_string();
+    // `.cargo/bin/hmanlab` covers `cargo install`; `target/release` and
+    // `target/debug` cover devs running from a local checkout.
+    for needle in [".cargo/bin", "target/release", "target/debug"] {
+        if s.contains(needle) {
+            return Some(needle.to_string());
+        }
+    }
+    None
 }
 
 fn parse_command(text: &str) -> Option<Command> {
@@ -62,6 +80,8 @@ fn parse_command(text: &str) -> Option<Command> {
         "workspace" | "ws" | "cwd" => Command::Workspace(rest),
         "compact" | "compress" | "summarize" => Command::Compact,
         "disconnect" | "logout" | "signout" => Command::Disconnect(rest),
+        "update" | "upgrade" | "selfupdate" => Command::Update,
+        "settings" | "whoami" | "account" | "me" => Command::Settings,
         other => Command::Unknown(other.to_string()),
     })
 }
@@ -479,7 +499,7 @@ impl App {
         }
 
         // Inline autocomplete popup (slash / @ mention) intercept — must
-        // come before the global Esc-quit, Up/Down scroll, and Enter-submit
+        // come before the global Esc, Up/Down scroll, and Enter-submit
         // handlers so the popup gets first dibs on its own navigation keys.
         if self.inline_popup.is_open() && key.modifiers.is_empty() {
             match key.code {
@@ -573,7 +593,22 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Esc => return AppAction::Quit,
+            // Esc never quits — too easy to hit mid-conversation. Priority
+            // order: interrupt an in-flight generation, then clear a draft,
+            // then no-op. Quit stays available via /quit, /exit, Ctrl+Q,
+            // and Ctrl+C (when nothing's running).
+            KeyCode::Esc => {
+                if self.generating {
+                    self.cancel();
+                } else {
+                    let has_text = self.input.lines().iter().any(|l| !l.is_empty());
+                    if has_text {
+                        self.reset_input();
+                        self.inline_popup = InlinePopup::None;
+                    }
+                }
+                return AppAction::Continue;
+            }
             KeyCode::PageUp => {
                 self.follow = false;
                 self.scroll = self.scroll.saturating_sub(5);
@@ -762,6 +797,8 @@ impl App {
             Command::Workspace(path) => self.switch_workspace(path),
             Command::Compact => self.start_compact(tx, None),
             Command::Disconnect(name) => self.handle_disconnect(&name),
+            Command::Update => self.start_update(tx),
+            Command::Settings => self.show_settings(tx),
             Command::Unknown(name) => {
                 self.push_info(format!(
                     "Unknown command: /{name}\nType /help to see available commands."
@@ -1125,6 +1162,198 @@ impl App {
         });
     }
 
+    /// `/settings` — show what the user has set: hmanlab version, active
+    /// model, Ollama host, configured BYOK providers (presence only,
+    /// never the key), workspace, plus the authenticated user's profile.
+    /// The profile + latest-version look-up run in the background — the
+    /// prompt returns instantly with the locally-known fields and the
+    /// account block fills in when the request resolves.
+    ///
+    /// Backend URL / "where this came from" is intentionally not shown —
+    /// users care about their account and configuration, not plumbing.
+    fn show_settings(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
+        let current = env!("CARGO_PKG_VERSION");
+        let mut byok = Vec::new();
+        if self.zai_api_key.is_some() {
+            byok.push("z.ai (subscription)");
+        }
+        if self.zai_usage_api_key.is_some() {
+            byok.push("z.ai (usage)");
+        }
+        if self.ollama_cloud_api_key.is_some() {
+            byok.push("Ollama Cloud");
+        }
+        if self.opencode_api_key.is_some() {
+            byok.push("OpenCode");
+        }
+        let byok_line = if byok.is_empty() {
+            "none".to_string()
+        } else {
+            byok.join(", ")
+        };
+        let upstream = self.update_available.as_deref();
+        let version_line = match upstream {
+            Some(latest) if crate::update_check::newer(current, latest) => {
+                format!("{current}  (npm has {latest} — run /update)")
+            }
+            _ => current.to_string(),
+        };
+        let local = format!(
+            "Settings\n\
+             \x20 hmanlab version  : {version_line}\n\
+             \x20 model            : {model}\n\
+             \x20 ollama host      : {host}\n\
+             \x20 BYOK providers   : {byok_line}\n\
+             \x20 workspace        : {ws}\n\
+             \n\
+             Account: loading…",
+            model = self.model,
+            host = self.client.base,
+            ws = self.workspace.display(),
+        );
+        self.push_info(local);
+        self.status = "Loading account info…".into();
+
+        let Some(api) = self.api.clone() else {
+            // No auth client → nothing to fetch. The local block above
+            // already covers everything we can show.
+            return;
+        };
+        let current_owned = current.to_string();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let me = api.fetch_me().await;
+            let latest = crate::update_check::fetch_latest_npm().await.ok();
+            let account = match me {
+                Ok(me) => {
+                    let name = me.name.as_deref().unwrap_or("(no display name set)");
+                    let admin = if me.is_admin { " · admin" } else { "" };
+                    let opt = if me.training_opt_in {
+                        "opted in"
+                    } else {
+                        "opted out"
+                    };
+                    format!(
+                        "Account\n\
+                         \x20 name             : {name}{admin}\n\
+                         \x20 email            : {email}\n\
+                         \x20 training data    : {opt}",
+                        email = me.email,
+                    )
+                }
+                Err(_) => "Account\n\x20 (could not load — try /settings again later)".to_string(),
+            };
+            let version_tail = match latest {
+                Some(l) if crate::update_check::newer(&current_owned, &l) => {
+                    format!("\n\nnpm latest: {l} — run /update to install.")
+                }
+                Some(l) => format!("\n\nnpm latest: {l} (you're up to date)."),
+                None => String::new(),
+            };
+            let _ = tx.send(StreamMsg::Settings(format!("{account}{version_tail}")));
+        });
+    }
+
+    /// `/update` — shell out to `npm install -g hmanlab@latest` in the
+    /// background and report the outcome inline. The currently running
+    /// process keeps serving the chat; npm replaces the on-disk binary,
+    /// and the user picks it up on next launch.
+    ///
+    /// If the binary was installed via cargo (path under `.cargo/bin` or
+    /// a `target/` build dir), we don't even try npm — surface the right
+    /// `cargo install` command instead so the user upgrades through the
+    /// channel they actually used.
+    fn start_update(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
+        let current = env!("CARGO_PKG_VERSION");
+
+        if let Some(hint) = cargo_install_hint() {
+            self.push_info(format!(
+                "hmanlab looks like a cargo install ({hint}).\n\
+                 Run this in another terminal to upgrade:\n\
+                 \x20 cargo install hmanlab --force"
+            ));
+            self.status = "Cargo install detected — see message".into();
+            return;
+        }
+
+        self.push_info(format!(
+            "Checking npm for a newer hmanlab (current {current})…"
+        ));
+        self.status = "Checking latest version…".into();
+
+        let tx = tx.clone();
+        let current_owned = current.to_string();
+        tokio::spawn(async move {
+            // Step 1: ask npm what's published. If the lookup fails we still
+            // proceed to install — the user explicitly asked, and a flaky
+            // registry shouldn't block them. If it succeeds and the current
+            // version is already latest, bail out without spawning npm.
+            match crate::update_check::fetch_latest_npm().await {
+                Ok(latest) if !crate::update_check::newer(&current_owned, &latest) => {
+                    let _ = tx.send(StreamMsg::UpdateResult {
+                        ok: true,
+                        text: format!(
+                            "Already up to date — hmanlab {current_owned} matches the latest \
+                             on npm ({latest}). No install needed."
+                        ),
+                    });
+                    return;
+                }
+                Ok(latest) => {
+                    let _ = tx.send(StreamMsg::UpdateInfo(format!(
+                        "Update available: {current_owned} → {latest}. \
+                         Running: npm install -g hmanlab@latest"
+                    )));
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamMsg::UpdateInfo(format!(
+                        "Couldn't reach npm registry ({e}). Trying install anyway…"
+                    )));
+                }
+            }
+
+            let result = tokio::process::Command::new("npm")
+                .args(["install", "-g", "hmanlab@latest"])
+                .output()
+                .await;
+            let msg = match result {
+                Ok(out) if out.status.success() => StreamMsg::UpdateResult {
+                    ok: true,
+                    text: "Update complete. Restart hmanlab to use the new version.".into(),
+                },
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let tail = stderr.lines().rev().take(8).collect::<Vec<_>>();
+                    let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+                    StreamMsg::UpdateResult {
+                        ok: false,
+                        text: format!(
+                            "npm install failed (exit {}).\n{}",
+                            out.status.code().unwrap_or(-1),
+                            if tail.is_empty() {
+                                "No stderr output.".into()
+                            } else {
+                                tail
+                            }
+                        ),
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => StreamMsg::UpdateResult {
+                    ok: false,
+                    text: "Couldn't run `npm` — it's not on PATH.\n\
+                           Install Node.js (https://nodejs.org) and try again, or grab a\n\
+                           prebuilt binary from https://github.com/rekabytes/hmanlab/releases."
+                        .into(),
+                },
+                Err(e) => StreamMsg::UpdateResult {
+                    ok: false,
+                    text: format!("Failed to launch npm: {e}"),
+                },
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
     fn show_help_inline(&mut self) {
         let help = "Commands:\n\
             \x20 /new                start a fresh session\n\
@@ -1139,6 +1368,8 @@ impl App {
             \x20 /clear              clear visible chat (current session keeps going)\n\
             \x20 /compact            summarise prior turns into a single context briefing\n\
             \x20 /disconnect [name]  drop a BYOK provider key (zai, zai-usage, ollama-cloud, opencode)\n\
+            \x20 /settings, /whoami  show account info, version, configured providers\n\
+            \x20 /update             update hmanlab to the latest npm release\n\
             \x20 /help, /?           show this help\n\
             \x20 /quit, /exit        quit\n\
             \n\
@@ -1150,7 +1381,7 @@ impl App {
             \x20 Enter         send  ·  Shift+Enter  newline\n\
             \x20 Ctrl+N        new session  ·  Ctrl+T  fold/unfold all tool + thinking blocks\n\
             \x20 Wheel         scroll chat  ·  PgUp/PgDn  Home/End  also scroll\n\
-            \x20 Ctrl+C        cancel  ·  Esc  quit\n\
+            \x20 Ctrl+C        cancel/quit  ·  Esc  interrupt generation / clear draft\n\
             \n\
             Drag with your mouse to select text — copy with your terminal's normal\n\
             shortcut (Ctrl+Shift+C / Cmd+C). The wheel scrolls the chat in single-line\n\
