@@ -136,7 +136,10 @@ pub enum StreamMsg {
     UpdateAvailable(String),
     /// `/update` finished. `ok` is the exit status; `text` is the
     /// message to surface inline (success summary or failure cause).
-    UpdateResult { ok: bool, text: String },
+    UpdateResult {
+        ok: bool,
+        text: String,
+    },
     /// `/update` interim progress line (e.g., "0.1.4 → 0.1.5, installing…").
     /// Pushed to the chat as an info message so the user can see what
     /// the background task is doing without blocking.
