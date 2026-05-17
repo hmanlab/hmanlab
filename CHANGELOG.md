@@ -5,6 +5,11 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-05-18
+
+### Fixed
+- **npm publish unblocked.** The 0.1.6 release reached the publish job (the workflow gate fix from 0.1.6 worked) but failed with `E404` on the first platform package: npmjs.com's Trusted Publisher entries still referenced the old `rekabytes/hmanlab` repo after the GitHub transfer, so OIDC tokens minted from `hmanlab/hmanlab` weren't accepted. The retry loop then poisoned sigstore's transparency log with a half-completed provenance entry for `@hmanlab/linux-x64@0.1.6`, permanently blocking that version from being re-released. Trusted Publisher entries on all 6 packages have been updated to `hmanlab/hmanlab`; 0.1.7 is a fresh version so sigstore will accept new provenance entries. Same code as 0.1.5/0.1.6.
+
 ## [0.1.6] - 2026-05-18
 
 ### Fixed
@@ -78,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run wizard for Ollama URL + hmanlab-api key, saved to `~/.config/hmanlab/config.json` (mode 600).
 - npm packaging via the per-arch optional-dependency pattern: umbrella `hmanlab` + `@hmanlab/{linux-x64,linux-arm64,darwin-x64,darwin-arm64,win32-x64}`.
 
+[0.1.7]: https://github.com/hmanlab/hmanlab/compare/0.1.6...0.1.7
 [0.1.6]: https://github.com/hmanlab/hmanlab/compare/0.1.5...0.1.6
 [0.1.5]: https://github.com/rekabytes/hmanlab/compare/0.1.4...0.1.5
 [0.1.4]: https://github.com/rekabytes/hmanlab/compare/0.1.3...0.1.4
