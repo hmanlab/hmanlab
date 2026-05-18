@@ -162,7 +162,10 @@ impl App {
         self.status = "Loading older messages…".into();
         let tx = tx.clone();
         tokio::spawn(async move {
-            match client.load_older_messages(&session_id, before_id, PAGE_SIZE).await {
+            match client
+                .load_older_messages(&session_id, before_id, PAGE_SIZE)
+                .await
+            {
                 Ok(messages) => {
                     let _ = tx.send(StreamMsg::MoreLoaded { messages });
                 }
@@ -179,10 +182,7 @@ impl App {
     /// history, or a load is already in flight. The actual fetch reuses
     /// `load_more`'s spawn, so the `loading_more` flag and `MoreLoaded`
     /// stream handler govern both paths.
-    pub(in crate::app) fn maybe_auto_load_more(
-        &mut self,
-        tx: &mpsc::UnboundedSender<StreamMsg>,
-    ) {
+    pub(in crate::app) fn maybe_auto_load_more(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
         if self.loading_more {
             return;
         }
