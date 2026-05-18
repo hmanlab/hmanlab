@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-05-19
+
+### Added
+- **OpenRouter as a new provider.** Add one OpenRouter API key and a curated set of popular models becomes available in `/model` — OpenAI's GPT-4o, Anthropic's Claude 3.5 Sonnet/Haiku, Google's Gemini 2.0 Flash, Meta's Llama 3.3 70B, Qwen 2.5 72B, DeepSeek Chat, and gpt-4o-mini as the default. One key, one bill, many vendors. Get a key at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). Disconnect with `/disconnect openrouter` (or `or`).
+- **Auto-load older messages when you scroll up.** In a loaded session, scrolling to the top of the chat automatically pages in older history — no more typing `/more`. Works with the mouse wheel, Page Up, the Up arrow on a single-line input, and Home. After fetching, the viewport stays anchored on the same content so you don't lose your place.
+
+### Changed
+- **Saved sessions now load 30 most recent messages** (was 10), so most chats fit on one screen without paging.
+- **First-run wizard and READMEs now spell out that hmanlab is free and you bring your own LLM** (local Ollama or a BYOK provider like z.ai, Ollama Cloud, OpenCode Go, OpenRouter). The `bai_…` key registered at [hmanlab.senireka.my](https://hmanlab.senireka.my) only powers session storage — it doesn't grant access to any model.
+
+### Fixed
+- **`/update` recommends the right upgrade command for curl installs.** If you installed via the `install.sh` one-liner, `/update` now points you at that one-liner instead of telling you to run `npm install`. Cargo installs already worked; npm installs still upgrade in place automatically.
+
+[0.1.10]: https://github.com/hmanlab/hmanlab/compare/0.1.9...0.1.10
+
 ## [0.1.9] - 2026-05-18
 
 ### Added
