@@ -124,4 +124,3 @@ pub fn role_label(role: &str) -> (&'static str, Color) {
         _ => ("?", color::FG_DIM),
     }
 }
-

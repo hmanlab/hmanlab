@@ -90,7 +90,10 @@ fn render(selected: bool, first: bool) -> Result<()> {
         let active = val == selected;
         if active {
             // Bright peach matches the TUI's primary accent.
-            write!(stdout, "\r\x1b[2K  \x1b[1;38;2;250;179;135m▶ {text}\x1b[0m\r\n")?;
+            write!(
+                stdout,
+                "\r\x1b[2K  \x1b[1;38;2;250;179;135m▶ {text}\x1b[0m\r\n"
+            )?;
         } else {
             write!(stdout, "\r\x1b[2K  \x1b[2m  {text}\x1b[0m\r\n")?;
         }

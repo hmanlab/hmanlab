@@ -38,8 +38,9 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 
 ### Tools & memory
 
-- **Agentic tool calls** — the model reads files, explores directories, runs git commands, edits/writes files, executes shell commands, and recalls persistent memories. Every destructive action requires your confirmation in a popup with a diff preview.
-- **Workspace trust** — on first launch in a new directory, hmanlab asks whether to trust the workspace. Untrusted workspaces allow read-only tools (`read_file`, `list_dir`, `find_files`, `git_*`) but block destructive ones. Use `/trust` or `/untrust` to change later.
+- **Agentic tool calls** — the model reads files, explores directories, runs git commands, edits/writes files, executes shell commands, and recalls persistent memories. Every destructive action requires your confirmation in a scrollable popup with a diff preview.
+- **Workspace trust** — on first launch in a new directory, hmanlab asks whether to trust the workspace. Untrusted workspaces allow read-only tools but block destructive ones. Use `/trust` or `/untrust` to change later. Dotfiles like `.env` are only visible when trusted.
+- **Model persistence** — your last chosen model is remembered across restarts. Loading a saved session won't override it.
 - **Persistent memory** — save and recall durable facts about you, your project, or how to behave, across sessions. Two scopes: user-wide and project-local.
 - **Auto-compaction** — when the context window fills up, old turns are summarised into a single message so the conversation keeps going without losing the thread.
 
@@ -48,7 +49,7 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 - **Session persistence** — chats save to the hmanlab-api backend over HTTPS so future clients (mobile, web) can share your history. Falls back to local-only when the API is unreachable.
 - **Session browsing** — `/sessions` to list, `/load <id>` to resume, `/more` to page through older messages.
 - **Sidebar + file viewer** — browse your workspace tree and open files inline without leaving the TUI.
-- **Mouse support** — drag to select text (copies via OSC 52), wheel to scroll, click on tool blocks to expand/collapse.
+- **Mouse support** — drag to select text (copies via OSC 52), wheel to scroll, click on tool blocks to expand/collapse or re-view an approved diff.
 - **Catppuccin Mocha theme** — coherent palette across header, sidebar, chat, popups, and viewer. Centralised in `src/ui/theme.rs` so every renderer pulls from one place.
 - **First-run wizard** — guided setup for API key and provider selection on first launch; skip-everything-and-configure-later is fine.
 - **Token tracking** — running prompt + completion token count shown in the header.
@@ -160,7 +161,7 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | Key | Action |
 |---|---|
 | `Enter` | Send message |
-| `Shift+Enter` | Newline in input |
+| `Alt+Enter` / `Ctrl+J` | Newline in input (most terminals collapse `Shift+Enter` to plain Enter) |
 | `Ctrl+N` | New session |
 | `Ctrl+M` | Open model picker |
 | `Ctrl+T` | Fold/unfold all tool blocks and thinking blocks |
@@ -202,6 +203,7 @@ When using a tool-capable model (`qwen2.5`, `qwen3`, `glm-4.7`, etc.), the AI ca
 | `git_diff` | Line-level diffs |
 | `git_show` | Show a specific commit |
 | `edit_file` | Surgical string replacement (user confirms) |
+| `multi_edit` | Batch multiple edits to the same file (one confirm) |
 | `write_file` | Create or overwrite a file (user confirms) |
 | `run_command` | Shell command in workspace (user confirms, 30 s timeout) |
 | `save_memory` | Save durable facts to persistent memory store (user confirms) |

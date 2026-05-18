@@ -162,10 +162,7 @@ async fn main() -> Result<()> {
         .iter()
         .map(std::path::PathBuf::from)
         .collect();
-    app.workspace_trusted = app
-        .trusted_workspaces
-        .iter()
-        .any(|p| p == &app.workspace);
+    app.workspace_trusted = app.trusted_workspaces.iter().any(|p| p == &app.workspace);
     // Re-seed now that we know the trust state — the first call above
     // ran with the default `workspace_trusted = false`, so trusted
     // workspaces wouldn't have shown their dotfile dirs at root.

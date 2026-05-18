@@ -65,10 +65,7 @@ pub(super) async fn tool_edit_file(args: &Value, ctx: &ToolContext) -> Result<St
     // instead of raw byte counts — much easier for the user to size up.
     let diff = diff_edit(old_string, new_string);
     let (added, removed) = diff_stats(&diff);
-    let prompt = format!(
-        "Edit file {} (+{added}L -{removed}L)",
-        resolved.display(),
-    );
+    let prompt = format!("Edit file {} (+{added}L -{removed}L)", resolved.display(),);
     if !confirm(ctx, prompt, diff).await? {
         return Ok("(user denied this edit)".into());
     }
@@ -121,9 +118,7 @@ pub(super) async fn tool_multi_edit(args: &Value, ctx: &ToolContext) -> Result<S
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("multi_edit: edit #{i} missing 'new_string'"))?;
         if old.is_empty() {
-            bail!(
-                "multi_edit: edit #{i} has empty 'old_string' — use write_file to create a file"
-            );
+            bail!("multi_edit: edit #{i} has empty 'old_string' — use write_file to create a file");
         }
         if old == new {
             bail!("multi_edit: edit #{i} 'old_string' and 'new_string' are identical (no-op)");
@@ -211,11 +206,7 @@ pub(super) async fn tool_write_file(args: &Value, ctx: &ToolContext) -> Result<S
     } else {
         "CREATE"
     };
-    let prompt = format!(
-        "{} {} (+{added}L -{removed}L)",
-        action,
-        resolved.display()
-    );
+    let prompt = format!("{} {} (+{added}L -{removed}L)", action, resolved.display());
     if !confirm(ctx, prompt, diff).await? {
         return Ok("(user denied this write)".into());
     }

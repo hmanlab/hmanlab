@@ -154,16 +154,16 @@ fn render_status(f: &mut Frame, area: Rect, app: &App) {
         .split(area);
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                "▎ ",
-                Style::default().fg(theme::color::ACCENT_ALT),
-            ),
+            Span::styled("▎ ", Style::default().fg(theme::color::ACCENT_ALT)),
             Span::styled(app.status.as_str(), Style::default().fg(theme::color::FG)),
         ])),
         chunks[0],
     );
     let help = Line::from(vec![
         Span::styled("/help", Style::default().fg(theme::color::FG)),
+        Span::styled("  ·  ", Style::default().fg(theme::color::FG_DIMMER)),
+        Span::styled("alt+enter", Style::default().fg(theme::color::FG_DIM)),
+        Span::styled(" newline", Style::default().fg(theme::color::FG_DIMMER)),
         Span::styled("  ·  ", Style::default().fg(theme::color::FG_DIMMER)),
         Span::styled("drag", Style::default().fg(theme::color::FG_DIM)),
         Span::styled(" copy", Style::default().fg(theme::color::FG_DIMMER)),
@@ -174,10 +174,7 @@ fn render_status(f: &mut Frame, area: Rect, app: &App) {
         Span::styled("^T", Style::default().fg(theme::color::FG_DIM)),
         Span::styled(" fold ", Style::default().fg(theme::color::FG_DIMMER)),
     ]);
-    f.render_widget(
-        Paragraph::new(help).alignment(Alignment::Right),
-        chunks[1],
-    );
+    f.render_widget(Paragraph::new(help).alignment(Alignment::Right), chunks[1]);
 }
 
 /// Strip scheme and port from the configured host URL — `http://192.168.3.3:11434`
