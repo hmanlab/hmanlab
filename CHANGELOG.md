@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-19
+
+### What's new
+- **Multi-agent specialists.** Configure up to 5 named specialists, each with its own model and a one-line "use this when …" description. The main agent can `consult_specialist` automatically when its delegation rules match, or you can route by hand with `/ask <name> <query>`. Specialists run with a read-only tool surface (file reads, git, memory recall) — writes / shell / memory mutation stay with the main agent so cost stays bounded and loops can't form. Set them up via `/agents add` (5-step wizard with 7 opinionated templates: code-reviewer, planner, file-explorer, researcher, triage, test-advisor, doc-reviewer). Per-session opt-in with `/agents on` so you don't surprise-bill yourself across restarts. Header tally splits tokens per agent so the cost of consults stays legible.
+- **Telegram bot integration.** Pair your own Telegram bot to chat with hmanlab from your phone. Run `/telegram setup` and paste a `@BotFather` token, then DM the bot to receive a 6-character pairing code and redeem it in the terminal with `/telegram pair <code>`. Only allowlisted contacts can interact; codes expire after 10 minutes. DMs from paired users land in the local TUI as user turns and the assistant's reply DMs back. Destructive tool actions get inline ✅ Allow / 🔏 Always / ❌ Deny buttons (with a `y`/`n` text fallback). Slash commands (`/help`, `/models`, `/model`, `/new`, `/sessions`, `/settings`, `/agents`, `/ask`) work from Telegram too with the same aliases as the local terminal. Optional `/telegram notify on` DMs paired users when a long local turn finishes after the terminal goes idle.
+- **"Did you mean?" suggestions for typo'd subcommands.** Type `/agents lst` and hmanlab now suggests `/agents list` instead of silently falling through to the help screen.
+
+### Changed
+- **Streaming feels smoother.** Token-by-token replies coalesce multiple chunks into one redraw, and inline markdown is cached so long transcripts don't re-parse every paragraph on every frame. Long replies stay responsive even when the model is firing tokens fast.
+- **Sidebar stays responsive on big repos.** The workspace tree is walked only when something actually changes (you toggle a directory or switch workspaces), not on every frame. Clicking around a large monorepo no longer stalls the chat stream.
+- **Opening large files no longer freezes the UI.** Clicking a file in the sidebar shows `loading…` immediately while the read happens on a background thread. The viewer fills in when the read completes.
+- **Config writes don't block the UI.** Adding a BYOK key, editing a specialist, or trusting a workspace now persists to disk on a background worker — no more pauses when finishing a wizard.
+- **`Ctrl+C` during a multi-agent consult stops the specialist too.** Previously a runaway specialist could keep iterating (and billing your BYOK provider) after you cancelled the main agent. Now one `Ctrl+C` stops everything in flight.
+- **Slash command aliases work everywhere.** `/m` for `/model`, `/n` for `/new`, `/ls` for `/models`, `/tg` for `/telegram` and the rest now work the same way from Telegram DMs as they do in the local terminal.
+
+### Fixed
+- **Long replies no longer cut off mid-paragraph.** Scroll math now uses visual rows (after word-wrap) instead of logical lines, so the bottom of a long streaming reply is always reachable with `End` or follow-mode.
+- **`/help` always matches what works.** The commands cheatsheet now generates from the same table the parser uses, so help text can't drift from what's actually accepted. Aliases and argument shapes appear automatically next to each command.
+- **Tool-result correlation can't silently break.** Tool result messages are built via a dedicated constructor that requires the `tool_call_id` matching the originating assistant turn — strict providers like MiniMax 400 without it, and there's no longer a struct literal to forget the field in.
+
+[0.2.0]: https://github.com/hmanlab/hmanlab/compare/0.1.11...0.2.0
+
 ## [0.1.11] - 2026-05-19
 
 ### Added

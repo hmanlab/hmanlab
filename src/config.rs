@@ -134,6 +134,34 @@ pub const OPENROUTER_VENDORS: &[&str] = &[
     "z-ai",
 ];
 
+/// Every BYOK provider hmanlab can hold an API key for. Used by the
+/// `/model` picker (one "+ Add … key" row per unconfigured provider),
+/// `/disconnect` (one row per configured one), and `/settings`. Listing
+/// them once here keeps the dispatch tables in those files honest —
+/// add a provider here and the UI surfaces it automatically.
+pub const BYOK_PROVIDERS: &[&str] = &[
+    ZAI_SUBSCRIPTION_PROVIDER,
+    ZAI_USAGE_PROVIDER,
+    OLLAMA_CLOUD_PROVIDER,
+    OPENCODE_PROVIDER,
+    OPENROUTER_PROVIDER,
+];
+
+/// Human-readable provider name for UI display. Used by the picker's
+/// `+ Add <name> key` rows, the `/disconnect` list, and `/settings`.
+/// Falls back to the raw provider id for anything we don't know about
+/// (so future additions don't render blank).
+pub fn provider_label(provider: &str) -> &str {
+    match provider {
+        ZAI_SUBSCRIPTION_PROVIDER => "z.ai (subscription)",
+        ZAI_USAGE_PROVIDER => "z.ai (usage-based)",
+        OLLAMA_CLOUD_PROVIDER => "Ollama Cloud",
+        OPENCODE_PROVIDER => "OpenCode Go",
+        OPENROUTER_PROVIDER => "OpenRouter",
+        other => other,
+    }
+}
+
 /// One user-added model from a BYOK provider. Lives in extra_models so the
 /// `/model` picker can list it alongside Ollama-discovered models.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -142,6 +170,84 @@ pub struct ExtraModel {
     pub provider: String,
     /// Model name as the provider expects it (e.g. "glm-4-plus").
     pub name: String,
+}
+
+/// Hard ceiling on the number of specialists a user can configure. Five is
+/// arbitrary but generous — Claude Code subagent setups in the wild rarely
+/// go past three or four — and capping it keeps the wizard's model picker
+/// from sliding into a hierarchy that needs paging.
+pub const MAX_SPECIALISTS: usize = 5;
+
+/// One specialist agent: a different model + system prompt the user can
+/// invoke via `/ask <name> <query>`. Each is a leaf — specialists do NOT
+/// consult other specialists (see [`AgentsConfig`] notes).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SpecialistAgent {
+    /// Short slug used in `/ask <name>` and (in phase 2) as the
+    /// `consult_specialist` tool argument. Letters/digits/_/- only,
+    /// 2-30 chars. Enforced when persisting via the wizard.
+    pub name: String,
+    /// Model identifier as the provider expects it (e.g. "glm-5.1",
+    /// "moonshotai/kimi-k2.6"). Same conventions as `ExtraModel.name`.
+    pub model: String,
+    /// `None` = local Ollama; `Some("openrouter")` etc. matches the
+    /// `ExtraModel.provider` strings, so picker plumbing applies.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// One-line "use this when…" — shown in `/agents list` and (phase 2)
+    /// fed into the `consult_specialist` tool's description so the main
+    /// agent knows when to delegate.
+    pub task: String,
+    /// Full persona instructions delivered as the system prompt for any
+    /// `/ask` or `consult_specialist` invocation against this specialist.
+    pub system_prompt: String,
+    /// Disabled specialists stay in the roster but neither `/ask` nor
+    /// the consult tool can reach them. Lets users park a config without
+    /// deleting it.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Roster of specialist agents persisted in `~/.config/hmanlab/config.json`
+/// under the `agents` block. Session activation is NOT persisted — every
+/// TUI launch starts in single-model mode and the user opts in with
+/// `/agents on`, by design (no surprise double-spend).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct AgentsConfig {
+    #[serde(default)]
+    pub specialists: Vec<SpecialistAgent>,
+}
+
+impl AgentsConfig {
+    /// Look up an enabled specialist by name (case-insensitive on the
+    /// name slug). Returns `None` for missing OR disabled — callers
+    /// don't need to distinguish; both mean "can't reach this".
+    pub fn enabled_by_name(&self, name: &str) -> Option<&SpecialistAgent> {
+        let target = name.trim().to_ascii_lowercase();
+        self.specialists
+            .iter()
+            .find(|s| s.enabled && s.name.to_ascii_lowercase() == target)
+    }
+
+    /// Mutable counterpart for the enable/disable/edit handlers.
+    pub fn by_name_mut(&mut self, name: &str) -> Option<&mut SpecialistAgent> {
+        let target = name.trim().to_ascii_lowercase();
+        self.specialists
+            .iter_mut()
+            .find(|s| s.name.to_ascii_lowercase() == target)
+    }
+
+    /// True if at least one specialist is in the enabled state. Driven
+    /// by `consult_specialist` tool registration in phase 2 — we don't
+    /// advertise the tool to the main model if nobody's available.
+    #[allow(dead_code)] // wired in phase 2 (consult_specialist tool)
+    pub fn any_enabled(&self) -> bool {
+        self.specialists.iter().any(|s| s.enabled)
+    }
 }
 
 /// What's persisted in ~/.config/hmanlab/config.json.
@@ -194,6 +300,30 @@ pub struct Config {
     /// matches one of the `ExtraModel::provider` strings.
     #[serde(default)]
     pub last_provider: Option<String>,
+    /// Telegram bot token from @BotFather. When present, the TUI spawns a
+    /// long-poll task at startup so the bot can receive DMs. The bot is
+    /// local to this TUI process — no hmanlab-api involvement.
+    #[serde(default)]
+    pub telegram_bot_token: Option<String>,
+    /// Telegram user IDs that have completed Pattern-C pairing. Only DMs
+    /// from these senders surface in the TUI; everyone else gets a fresh
+    /// pair code. Stored as i64 because that's the wire type — Telegram
+    /// IDs are immutable across username changes, which is the point.
+    #[serde(default)]
+    pub telegram_allowlist: Vec<i64>,
+    /// When true, paired Telegram users are DM'd a notification (with a
+    /// preview of the reply) every time a locally-typed turn finishes
+    /// AND the terminal has been idle for at least
+    /// [`crate::app::TELEGRAM_IDLE_THRESHOLD`]. Off by default — opt in
+    /// via `/telegram notify on`. Telegram-triggered turns already DM
+    /// their full reply via the phase-2 bridge, so we skip those.
+    #[serde(default)]
+    pub telegram_notify_on_idle: bool,
+    /// Roster of named specialist agents (see [`AgentsConfig`] +
+    /// [`SpecialistAgent`]). The roster persists; session activation
+    /// does not (handled per-process on `App.agents_session_enabled`).
+    #[serde(default)]
+    pub agents: AgentsConfig,
 }
 
 pub fn path() -> Result<PathBuf> {

@@ -25,7 +25,14 @@ pub(super) fn render_viewer(f: &mut Frame, area: Rect, app: &mut App) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    if let Some(err) = &file.error {
+    if file.loading {
+        lines.push(Line::from(Span::styled(
+            "loading…",
+            Style::default()
+                .fg(theme::color::FG_DIM)
+                .add_modifier(Modifier::ITALIC),
+        )));
+    } else if let Some(err) = &file.error {
         lines.push(Line::from(Span::styled(
             err.clone(),
             Style::default()

@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>The agentic terminal client for any LLM you have a key for.</b><br>
-  Local Ollama · Cloud Ollama · z.ai · OpenCode Go · One TUI
+  Local Ollama · Cloud Ollama · z.ai · OpenCode Go · Telegram · One TUI
 </p>
 
 <p align="center">
@@ -52,6 +52,7 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 - **Mouse support** — drag to select text (copies via OSC 52), wheel to scroll, click on tool blocks to expand/collapse or re-view an approved diff.
 - **Catppuccin Mocha theme** — coherent palette across header, sidebar, chat, popups, and viewer. Centralised in `src/ui/theme.rs` so every renderer pulls from one place.
 - **First-run wizard** — guided setup for API key and provider selection on first launch; skip-everything-and-configure-later is fine.
+- **Telegram connect** — pair your own Telegram bot to chat with hmanlab from your phone. Create a bot via @BotFather (paste the token with `/telegram setup`), then DM the bot to receive a 6-char pairing code — redeem it in the terminal with `/telegram pair <code>`. Only allowlisted contacts can interact; the code expires after 10 minutes. DMs from paired users are forwarded as user turns; the assistant's reply is sent back as a DM. Confirm destructive tool actions with inline ✅ Allow / 🔏 Always / ❌ Deny buttons (or a `y`/`n` text fallback). Slash commands (`/help`, `/models`, `/new`, `/sessions`, `/settings`) work from Telegram too. Idle notifications can DM paired users when a long local turn finishes.
 - **Token tracking** — running prompt + completion token count shown in the header.
 
 ---
@@ -149,6 +150,14 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `/compact` | Manually compact conversation history |
 | `/disconnect` | Remove a BYOK provider and its models |
 | `/settings`, `/whoami` | Show your account, version, and configured providers |
+| `/telegram setup [token]` | Set up or replace the Telegram bot (opens wizard if no token given) |
+| `/telegram pair [code]` | Redeem a pairing code from a Telegram DM |
+| `/telegram status` | Show bot status, paired users, and last event |
+| `/telegram unpair` | Clear all paired Telegram users (bot keeps running) |
+| `/telegram off` | Stop the bot and clear token + allowlist |
+| `/telegram notify [on\|off]` | Toggle idle notifications (DM when a local turn finishes) |
+| `/agents [sub]` | Manage specialist agents — see [docs/multiagents.md](docs/multiagents.md) |
+| `/ask <name> <query>` | Manually invoke a specialist (run `/agents on` first) |
 | `/update` | Check the npm registry and update to the latest release |
 | `/clear` | Clear visible chat (session keeps going) |
 | `/quit`, `/exit` | Quit (also `Ctrl+Q` or `Ctrl+C` when idle) |
@@ -181,6 +190,13 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `Y` / `N` | Quick-reply when AI asks a yes/no question |
 
 </details>
+
+---
+
+## Detailed docs
+
+- **[docs/multiagents.md](docs/multiagents.md)** — multi-agent specialists: configure up to 5 named experts, each on their own model, and let the main agent delegate via `consult_specialist` or invoke manually with `/ask`.
+- **[docs/telegram.md](docs/telegram.md)** — Telegram bot: pair your own bot to chat with hmanlab from your phone, with inline approval buttons for destructive tools.
 
 ---
 
@@ -234,6 +250,7 @@ Add a BYOK provider with `Ctrl+M` (or `/model`) → pick one of the `+ Add` entr
 | **z.ai usage-based** | `https://api.z.ai/api/paas/v4` | Bearer |
 | **Ollama Cloud** | `https://ollama.com` | Bearer (key from <https://ollama.com/settings/keys>) |
 | **OpenCode Go** | `https://opencode.ai/zen/go/v1` | Bearer |
+| **Telegram** | `api.telegram.org` (bot long-poll) | Bot token from @BotFather |
 
 Keys live in `~/.config/hmanlab/config.json` (mode `0600`) and are sent **only** to the matching provider — never to the hmanlab-api session backend.
 
@@ -247,6 +264,9 @@ hmanlab (Rust TUI binary)
    │
    ├── OpenAI-compat clients (z.ai, OpenCode Go, Ollama Cloud)
    │   └── streaming chat + tool calls via /chat/completions
+   │
+   ├── Telegram bot (api.telegram.org, long-poll)
+   │   └── DMs → user turns, replies → DMs back, y/n confirm bridge
    │
    ├── Memory store (~/.hmanlab/memory/ + <workspace>/.hmanlab/memory/)
    │   └── markdown files + auto-maintained MEMORY.md index
@@ -289,6 +309,7 @@ The TUI is a pure client. All persistence lives in hmanlab-api so future mobile 
 | `src/tools/workspace.rs` | Workspace path safety + output truncation |
 | `src/memory.rs` | Memory store I/O, MEMORY.md index maintenance |
 | `src/api.rs` | hmanlab-api HTTP client + async writer task for session persistence |
+| `src/telegram.rs` | Telegram bot — long-poll loop, pairing codes, allowlist, message chunking |
 | `src/config.rs` | Config file I/O, setup wizard, BYOK model definitions |
 
 </details>

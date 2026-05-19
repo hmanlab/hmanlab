@@ -17,7 +17,7 @@ use crate::api::ApiOp;
 use crate::ollama::ChatMessage;
 
 use super::commands::Command;
-use super::{fresh_textarea, App, AppAction, Mode, StreamMsg};
+use super::{fresh_textarea, App, AppAction, Mode, StreamMsg, TurnState};
 
 impl App {
     pub async fn handle_event(
@@ -34,12 +34,19 @@ impl App {
                 if key.kind != KeyEventKind::Press {
                     return Ok(AppAction::Continue);
                 }
+                // Phase-3 idle tracking: any key press resets the
+                // "user walked away" clock. Stamping here, before any
+                // mode-specific handler, means every key — picker
+                // navigation, scrolling, confirms — counts as activity.
+                self.last_keypress_at = Some(std::time::Instant::now());
                 match self.mode {
                     Mode::ModelPicker => Ok(self.handle_picker(key)),
                     Mode::Confirm => Ok(self.handle_confirm(key)),
                     Mode::AddModel => Ok(self.handle_add_model(key, tx)),
                     Mode::SessionPicker => Ok(self.handle_session_picker(key, tx)),
                     Mode::DisconnectPicker => Ok(self.handle_disconnect_picker(key)),
+                    Mode::TelegramSetup => Ok(self.handle_telegram_setup_key(key, tx)),
+                    Mode::AgentsSetup => Ok(self.handle_agents_setup_key(key, tx)),
                     Mode::Chat => Ok(self.handle_chat(key, tx)),
                 }
             }
@@ -71,6 +78,9 @@ impl App {
             Command::Settings => self.show_settings(tx),
             Command::Trust => self.trust_current_workspace(),
             Command::Untrust => self.untrust_current_workspace(),
+            Command::Telegram(sub) => self.handle_telegram(sub, tx),
+            Command::Agents(sub) => self.handle_agents(sub, tx),
+            Command::Ask { name, query } => self.handle_ask(name, query, tx),
             Command::Unknown(name) => {
                 self.push_info(format!(
                     "Unknown command: /{name}\nType /help to see available commands."
@@ -102,47 +112,10 @@ impl App {
     /// chat UI. Used by the Y/N quick-reply so accept/deny doesn't pollute the
     /// visible transcript.
     pub(super) fn inject_hidden_user(&mut self, text: &str, tx: &mpsc::UnboundedSender<StreamMsg>) {
-        if (self.models.is_empty() && self.extra_models.is_empty()) || self.generating {
+        if (self.models.is_empty() && self.extra_models.is_empty()) || self.turn.is_generating() {
             return;
         }
-        if let Some(api_tx) = &self.api_tx {
-            // Persist the silent reply too — the session record stays coherent.
-            let _ = api_tx.send(ApiOp::UserMessage {
-                content: text.to_string(),
-                model: self.model.clone(),
-            });
-        }
-        self.messages.push(ChatMessage {
-            role: "user".into(),
-            content: text.into(),
-            hidden: true,
-            ..Default::default()
-        });
-        self.messages.push(ChatMessage {
-            role: "assistant".into(),
-            content: String::new(),
-            ..Default::default()
-        });
-        self.generating = true;
-        self.follow = true;
-        self.status = format!("Generating with {}…", self.model);
-        let history: Vec<ChatMessage> = self.messages[..self.messages.len() - 1]
-            .iter()
-            .filter(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool"))
-            .cloned()
-            .collect();
-        let Some(backend) = self.make_backend() else {
-            self.generating = false;
-            self.status = format!("No API key configured for model {}", self.model);
-            return;
-        };
-        let model = self.model.clone();
-        let workspace = self.workspace.clone();
-        let tx = tx.clone();
-        let handle = tokio::spawn(async move {
-            crate::agent::agent_loop(backend, model, history, workspace, tx).await;
-        });
-        self.current_task = Some(handle);
+        self.start_turn(text.to_string(), true, tx);
     }
 
     pub(super) fn send_to_llm(&mut self, text: String, tx: &mpsc::UnboundedSender<StreamMsg>) {
@@ -158,8 +131,7 @@ impl App {
         // threshold, fold the visible history into a summary first, then
         // re-issue this user message once compaction completes. Bail out
         // if we're already compacting (avoid re-entry) or generating.
-        if !self.compacting
-            && !self.generating
+        if self.turn.is_idle()
             && self.last_prompt_tokens > crate::compact::AUTO_COMPACT_THRESHOLD
             && self
                 .messages
@@ -174,16 +146,29 @@ impl App {
             return;
         }
 
+        self.start_turn(text, false, tx);
+    }
+
+    /// Shared core of `send_to_llm` and `inject_hidden_user`: persist
+    /// the user message, push the visible placeholder pair, build the
+    /// history snapshot (translating compaction summaries to system
+    /// prompts), spawn the agent loop, and flip `turn` to Generating.
+    ///
+    /// Callers do their own pre-checks (model availability, auto-
+    /// compact trigger, generating-already guards) and call this with
+    /// `hidden = true` to keep the user message off the visible
+    /// transcript (Y/N injections) or `false` for the normal flow.
+    fn start_turn(&mut self, text: String, hidden: bool, tx: &mpsc::UnboundedSender<StreamMsg>) {
         if let Some(api_tx) = &self.api_tx {
             let _ = api_tx.send(ApiOp::UserMessage {
                 content: text.clone(),
                 model: self.model.clone(),
             });
         }
-
         self.messages.push(ChatMessage {
             role: "user".into(),
             content: text,
+            hidden,
             ..Default::default()
         });
         self.messages.push(ChatMessage {
@@ -191,7 +176,6 @@ impl App {
             content: String::new(),
             ..Default::default()
         });
-        self.generating = true;
         self.follow = true;
         self.status = format!("Generating with {}…", self.model);
 
@@ -215,31 +199,71 @@ impl App {
             .collect();
 
         let Some(backend) = self.make_backend() else {
-            self.generating = false;
             self.status = format!("No API key configured for model {}", self.model);
             return;
         };
         let model = self.model.clone();
         let workspace = self.workspace.clone();
+        let runners = self.live_specialist_runners();
+        let tool_defs = crate::tools::tool_definitions_with(&runners);
         let tx = tx.clone();
         let handle = tokio::spawn(async move {
-            crate::agent::agent_loop(backend, model, history, workspace, tx).await;
+            crate::agent::agent_loop_with(
+                backend, model, history, workspace, tx, tool_defs, runners,
+            )
+            .await;
         });
-        self.current_task = Some(handle);
+        self.turn = TurnState::Generating { task: handle };
     }
 
     pub(in crate::app) fn cancel(&mut self) {
-        if let Some(h) = self.current_task.take() {
-            h.abort();
-        }
-        if let Some(h) = self.compact_task.take() {
-            h.abort();
-            self.compacting = false;
-            self.pending_after_compact = None;
+        // One match handles both task variants. The Idle arm exists so
+        // a `cancel` during nothing-in-flight stays a no-op rather than
+        // panicking on an unwrap somewhere.
+        match std::mem::replace(&mut self.turn, TurnState::Idle) {
+            TurnState::Idle => {}
+            TurnState::Generating { task } => task.abort(),
+            TurnState::Compacting { task, .. } => task.abort(),
         }
         self.persist_assistant_if_any();
-        self.generating = false;
         self.active_tool_msg_idx = None;
+        self.active_specialist = None;
+        // If the cancelled turn was answering a Telegram DM, let the
+        // sender know — silence on their end would be worse than a curt
+        // explanation. Best-effort; the bot may already be down.
+        if let Some(chat_id) = self.pending_telegram_reply_chat.take() {
+            self.pending_telegram_reply_from = None;
+            if let Some(rt) = &self.telegram {
+                let _ = rt.out_tx.send(crate::telegram::dm(
+                    chat_id,
+                    "(cancelled by the local user before a reply was produced)".into(),
+                ));
+            }
+        }
+        // Same for an in-flight Telegram-bridged confirm: tell the
+        // remote sender we tore down the prompt before they answered
+        // AND blank out the buttons on the original message so the
+        // keyboard doesn't sit there pretending to be actionable.
+        if let Some(ctx) = self.pending_telegram_confirm.take() {
+            if let Some(req) = self.pending_confirm.take() {
+                let _ = req.responder.send(false);
+            }
+            if let Some(rt) = &self.telegram {
+                if let Some(message_id) = ctx.message_id {
+                    let _ = rt.out_tx.send(crate::telegram::TelegramOut::EditMessage {
+                        chat_id: ctx.chat_id,
+                        message_id,
+                        text: "(confirmation cancelled by the local user before you answered)"
+                            .into(),
+                    });
+                } else {
+                    let _ = rt.out_tx.send(crate::telegram::dm(
+                        ctx.chat_id,
+                        "(confirmation cancelled by the local user before you answered)".into(),
+                    ));
+                }
+            }
+        }
         self.status = "Cancelled".into();
     }
 
@@ -254,11 +278,11 @@ impl App {
         tx: &mpsc::UnboundedSender<StreamMsg>,
         pending_user_message: Option<String>,
     ) {
-        if self.compacting {
+        if self.turn.is_compacting() {
             self.push_info("A compaction is already running.".into());
             return;
         }
-        if self.generating {
+        if self.turn.is_generating() {
             self.push_info("Wait for the current turn to finish, then /compact.".into());
             return;
         }
@@ -290,8 +314,6 @@ impl App {
             .collect();
         let model = self.model.clone();
         let tx2 = tx.clone();
-        self.compacting = true;
-        self.pending_after_compact = pending_user_message;
         self.status = "Compacting conversation…".into();
         self.follow = true;
         self.push_info("/compact — summarising prior turns into a single context briefing.".into());
@@ -310,6 +332,18 @@ impl App {
                 }
             }
         });
-        self.compact_task = Some(handle);
+        self.turn = TurnState::Compacting {
+            task: handle,
+            pending_user: pending_user_message,
+        };
+    }
+
+    /// Defensively clear any `pending_user` buffered against an
+    /// in-flight compaction. Called by `/clear` and `/new` so a stale
+    /// user message can't get auto-resent after the user reset.
+    pub(in crate::app) fn drop_pending_compact_user(&mut self) {
+        if let TurnState::Compacting { pending_user, .. } = &mut self.turn {
+            *pending_user = None;
+        }
     }
 }

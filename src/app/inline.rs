@@ -14,86 +14,172 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// One row in the slash autocomplete list. `name` is the canonical name
-/// (without leading `/`), `desc` is a short hint shown to the right.
+/// One row in the slash command catalog. Single source of truth for
+/// `name`, `aliases`, `args`, `desc` — autocomplete reads it for the
+/// popup, the parser (`super::commands::parse_command`) uses
+/// `slash_canonical` to fold aliases back to the canonical name, and
+/// `/help` renders the cheatsheet from the same table.
 pub struct SlashCommand {
+    /// Canonical name (no leading `/`). The parser dispatches on this.
     pub name: &'static str,
+    /// Other strings the user might type. Folded back to `name` via
+    /// `slash_canonical`. Listed in `/help` after the canonical name so
+    /// muscle-memory aliases are discoverable.
+    pub aliases: &'static [&'static str],
+    /// Argument shape shown in `/help`, e.g. `"<id-prefix>"` or `""`.
+    /// Not used by autocomplete (which only shows name + desc).
+    pub args: &'static str,
+    /// One-line hint surfaced in autocomplete + `/help`.
     pub desc: &'static str,
 }
 
-/// Canonical slash commands. Aliases (`m` for `model`, `ls` for `models`,
-/// etc.) are accepted by the parser in `event.rs::parse_command` but only
-/// the primary name is suggested — keeps the popup list scannable.
+/// Canonical slash commands. Aliases live alongside the canonical name
+/// in each entry — `super::commands::slash_canonical` is the only place
+/// that knows how to fold them back, and the help text generator
+/// renders them in the same row.
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "help",
+        aliases: &["?", "h"],
+        args: "",
         desc: "show inline help",
     },
     SlashCommand {
         name: "new",
+        aliases: &["n"],
+        args: "",
         desc: "start a fresh session",
     },
     SlashCommand {
         name: "sessions",
+        aliases: &["history", "hist"],
+        args: "",
         desc: "list recent saved sessions",
     },
     SlashCommand {
         name: "load",
-        desc: "load a session by id prefix",
+        aliases: &["open"],
+        args: "<id-prefix>",
+        desc: "load a saved session (10 most recent messages)",
     },
     SlashCommand {
         name: "more",
-        desc: "load 10 older messages",
+        aliases: &["older"],
+        args: "",
+        desc: "load 10 older messages in the current loaded session",
     },
     SlashCommand {
         name: "model",
-        desc: "open model picker or switch",
+        aliases: &["m"],
+        args: "[name]",
+        desc: "open model picker or switch (partial match works)",
     },
     SlashCommand {
         name: "models",
+        aliases: &["ls"],
+        args: "",
         desc: "list available models",
     },
     SlashCommand {
         name: "host",
+        aliases: &["connect"],
+        args: "<url>",
         desc: "change Ollama host",
     },
     SlashCommand {
         name: "workspace",
+        aliases: &["ws", "cwd"],
+        args: "<path>",
         desc: "change agent workspace",
     },
     SlashCommand {
         name: "trust",
+        aliases: &["authorize", "authorise"],
+        args: "",
         desc: "authorise this workspace for file edits & shell",
     },
     SlashCommand {
         name: "untrust",
+        aliases: &["unauthorize", "unauthorise"],
+        args: "",
         desc: "remove this workspace from the trusted list",
     },
     SlashCommand {
         name: "compact",
-        desc: "manually compact conversation",
+        aliases: &["compress", "summarize"],
+        args: "",
+        desc: "summarise prior turns into a single context briefing",
     },
     SlashCommand {
         name: "disconnect",
-        desc: "remove a BYOK provider",
+        aliases: &["logout", "signout"],
+        args: "[name]",
+        desc: "drop a BYOK provider key (zai, zai-usage, ollama-cloud, opencode, openrouter)",
     },
     SlashCommand {
         name: "clear",
-        desc: "clear visible chat",
+        aliases: &["cls", "reset"],
+        args: "",
+        desc: "clear visible chat (current session keeps going)",
     },
     SlashCommand {
         name: "settings",
+        aliases: &["whoami", "account", "me"],
+        args: "",
         desc: "show account, version, and configured providers",
     },
     SlashCommand {
+        name: "telegram",
+        aliases: &["tg"],
+        args: "<sub>",
+        desc: "pair a Telegram bot (setup/pair/status/unpair/off/notify)",
+    },
+    SlashCommand {
+        name: "agents",
+        aliases: &["agent", "team"],
+        args: "<sub>",
+        desc: "manage specialist agents (add/on|off/list/edit/remove)",
+    },
+    SlashCommand {
+        name: "ask",
+        aliases: &[],
+        args: "<name> <query>",
+        desc: "manually invoke a specialist agent (run /agents on first)",
+    },
+    SlashCommand {
         name: "update",
+        aliases: &["upgrade", "selfupdate"],
+        args: "",
         desc: "update hmanlab to the latest npm release",
     },
     SlashCommand {
         name: "quit",
+        aliases: &["exit", "q", "bye"],
+        args: "",
         desc: "quit hmanlab",
     },
 ];
+
+/// Fold a user-typed name (with aliases) back to the canonical name in
+/// [`SLASH_COMMANDS`]. Returns `None` for anything that isn't a known
+/// command — callers treat that as an "unknown command" signal.
+///
+/// Single source of truth: both the local slash parser and the
+/// Telegram dispatch use this so adding an alias is a one-line change
+/// in `SLASH_COMMANDS` rather than a coordinated edit across three
+/// match arms.
+pub fn slash_canonical(input: &str) -> Option<&'static str> {
+    let lo = input.to_ascii_lowercase();
+    for cmd in SLASH_COMMANDS {
+        if cmd.name == lo {
+            return Some(cmd.name);
+        }
+        if cmd.aliases.iter().any(|a| *a == lo) {
+            return Some(cmd.name);
+        }
+    }
+    None
+}
 
 /// Slash autocomplete state.
 pub struct SlashPopup {

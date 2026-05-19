@@ -18,12 +18,13 @@ pub(in crate::ui) fn render_disconnect_picker(f: &mut Frame, full: Rect, app: &A
     let area = centered_rect(60, 50, full);
     f.render_widget(Clear, area);
     let items: Vec<ListItem> = app
-        .disconnect_entries
+        .disconnect_picker
+        .items
         .iter()
         .enumerate()
         .map(|(i, e)| {
             let label = format!(" {} — {} ", e.label, e.preview);
-            let style = if i == app.disconnect_index {
+            let style = if i == app.disconnect_picker.index {
                 Style::default()
                     .fg(ratatui::style::Color::Black)
                     .bg(theme::color::ERROR)
@@ -36,7 +37,7 @@ pub(in crate::ui) fn render_disconnect_picker(f: &mut Frame, full: Rect, app: &A
         .collect();
     let title = format!(
         "disconnect provider ({}) — ↑↓ Enter Esc",
-        app.disconnect_entries.len()
+        app.disconnect_picker.len()
     );
     let list =
         List::new(items).block(theme::popup_block(&title, true).padding(Padding::horizontal(1)));

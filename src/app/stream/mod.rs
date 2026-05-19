@@ -62,6 +62,137 @@ impl App {
             StreamMsg::OpenRouterModelsRefreshed(models) => {
                 self.on_openrouter_models_refreshed(models)
             }
+            StreamMsg::SpecialistTokens {
+                name,
+                prompt_tokens,
+                completion_tokens,
+            } => {
+                // Phase 2 attribution — also bump the main session
+                // totals so the global counter reflects the full spend
+                // (header shows main + per-specialist breakdown).
+                let entry = self.agent_token_tally.entry(name).or_insert((0, 0));
+                entry.0 = entry.0.saturating_add(prompt_tokens as u64);
+                entry.1 = entry.1.saturating_add(completion_tokens as u64);
+                self.total_prompt_tokens = self
+                    .total_prompt_tokens
+                    .saturating_add(prompt_tokens as u64);
+                self.total_completion_tokens = self
+                    .total_completion_tokens
+                    .saturating_add(completion_tokens as u64);
+            }
+            StreamMsg::SpecialistRequest {
+                runner,
+                query,
+                reply_tx,
+            } => {
+                // Phase 3: top-level spawn for the specialist sub-agent.
+                // Runs on its own Tokio worker so the parent agent's
+                // task isn't blocked while the specialist iterates;
+                // cancellation chains naturally via reply_tx.closed()
+                // inside `run_specialist_consult`.
+                let workspace = self.workspace.clone();
+                let parent_tx = tx.clone();
+                tokio::spawn(crate::agent::run_specialist_consult(
+                    runner, query, workspace, parent_tx, reply_tx,
+                ));
+            }
+            StreamMsg::FileLoaded {
+                display,
+                content,
+                error,
+            } => {
+                // Drop the result if the user has already closed the
+                // viewer or clicked a different file — the placeholder
+                // we set on click carries the display path, and any
+                // mismatch means the click that spawned this read is
+                // no longer the active selection.
+                if let Some(f) = self.open_file.as_mut() {
+                    if f.display == display {
+                        f.content = content;
+                        f.error = error;
+                        f.loading = false;
+                    }
+                }
+            }
+            StreamMsg::TelegramIncoming {
+                chat_id,
+                from,
+                text,
+            } => {
+                self.handle_telegram_message(chat_id, from, text, tx);
+            }
+            StreamMsg::TelegramBotStatus(text) => {
+                self.telegram_last_status = Some(text.clone());
+                // If the wizard is open AND this is a setup failure
+                // signal, surface it in the modal (instead of as a
+                // chat info line) and let the user retry the token.
+                // Also tear down the half-built runtime that
+                // telegram_setup parked eagerly — keeping it around
+                // would lie about "we're online" forever.
+                if self.mode == super::Mode::TelegramSetup
+                    && self.telegram_setup_step == super::TelegramSetupStep::Token
+                    && text.contains("setup failed")
+                {
+                    if let Some(rt) = self.telegram.take() {
+                        let _ = rt.ctl_tx.send(crate::telegram::TelegramCtl::Shutdown);
+                    }
+                    self.telegram_setup_validating = false;
+                    self.telegram_setup_error = Some(text);
+                    self.telegram_setup_input = super::fresh_textarea();
+                    self.telegram_setup_input
+                        .set_placeholder_text("Paste your @BotFather token here");
+                    return;
+                }
+                self.push_info(text);
+            }
+            StreamMsg::TelegramBotReady { token, username } => {
+                if let Some(rt) = self.telegram.as_mut() {
+                    if rt.token == token {
+                        rt.bot_username = username;
+                    }
+                }
+                // If the wizard is waiting on this step's validation,
+                // advance to Pair so the user can paste the code.
+                if self.mode == super::Mode::TelegramSetup
+                    && self.telegram_setup_step == super::TelegramSetupStep::Token
+                {
+                    self.telegram_setup_step = super::TelegramSetupStep::Pair;
+                    self.telegram_setup_validating = false;
+                    self.telegram_setup_error = None;
+                    self.telegram_setup_input = super::fresh_textarea();
+                    self.telegram_setup_input
+                        .set_placeholder_text("Paste the 6-char code the bot DM'd you");
+                    self.status =
+                        "Telegram setup — DM the bot, then paste the code  ·  Esc to cancel".into();
+                }
+            }
+            StreamMsg::TelegramConfirmSent {
+                callback_token,
+                message_id,
+            } => {
+                if let Some(ctx) = self.pending_telegram_confirm.as_mut() {
+                    if ctx.callback_token == callback_token {
+                        ctx.message_id = Some(message_id);
+                    }
+                }
+            }
+            StreamMsg::TelegramCallback {
+                callback_token,
+                action,
+                chat_id,
+                message_id,
+                from,
+                from_id,
+            } => {
+                self.handle_telegram_callback(
+                    callback_token,
+                    action,
+                    chat_id,
+                    message_id,
+                    from,
+                    from_id,
+                );
+            }
         }
     }
 

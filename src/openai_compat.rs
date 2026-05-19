@@ -34,7 +34,10 @@ pub async fn fetch_openrouter_models(base: &str, api_key: Option<&str>) -> Resul
     }
     let resp = req.send().await.map_err(|e| anyhow!("GET {url}: {e}"))?;
     if !resp.status().is_success() {
-        return Err(anyhow!("GET {url}: HTTP {}", resp.status()));
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let preview: String = body.chars().take(1000).collect();
+        return Err(anyhow!("GET {url}: HTTP {status} — {}", preview.trim()));
     }
     #[derive(Deserialize)]
     struct ModelEntry {
@@ -91,8 +94,22 @@ impl Client {
             .bearer_auth(&self.api_key)
             .json(&req)
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        // Surface the response body on non-2xx. `.error_for_status()`
+        // drops the body — useful for "did it work?" but useless for
+        // debugging, which is exactly when we need it. Providers
+        // (opencode, openrouter, z.ai) all return structured JSON
+        // errors like `{"error":{"message":"context length exceeded"}}`
+        // that the user needs to see; bare "HTTP 400" tells them
+        // nothing actionable.
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            // Truncate to keep one bad request from flooding the chat
+            // — most provider errors are well under this anyway.
+            let preview: String = body.chars().take(1000).collect();
+            return Err(anyhow!("POST {url}: HTTP {status} — {}", preview.trim()));
+        }
         let byte_stream = resp.bytes_stream();
 
         // Accumulator for streamed tool_calls (arguments arrive as fragments).
@@ -332,7 +349,11 @@ impl From<ChatMessage> for OaiMessage {
             content: m.content,
             name: m.name,
             tool_calls,
-            tool_call_id: None,
+            // Preserve the correlation id set by agent_loop_with on
+            // tool result messages. Strict providers (MiniMax via
+            // opencode) reject tool results without it — the bare
+            // status was "tool result's tool id() not found (2013)".
+            tool_call_id: m.tool_call_id,
         }
     }
 }

@@ -17,7 +17,8 @@ pub(in crate::ui) fn render_session_picker(f: &mut Frame, full: Rect, app: &App)
     let area = centered_rect(80, 70, full);
     f.render_widget(Clear, area);
     let items: Vec<ListItem> = app
-        .session_picker_items
+        .session_picker
+        .items
         .iter()
         .enumerate()
         .map(|(i, s)| {
@@ -26,7 +27,7 @@ pub(in crate::ui) fn render_session_picker(f: &mut Frame, full: Rect, app: &App)
             let model = s.model.as_deref().unwrap_or("?");
             let title: String = s.title.chars().take(70).collect();
             let label = format!(" {short}  [{model}]  {title} ");
-            let style = if i == app.session_picker_index {
+            let style = if i == app.session_picker.index {
                 Style::default()
                     .fg(ratatui::style::Color::Black)
                     .bg(theme::color::ACCENT_ALT)
@@ -37,10 +38,7 @@ pub(in crate::ui) fn render_session_picker(f: &mut Frame, full: Rect, app: &App)
             ListItem::new(label).style(style)
         })
         .collect();
-    let title = format!(
-        "sessions ({}) — ↑↓ Enter Esc",
-        app.session_picker_items.len()
-    );
+    let title = format!("sessions ({}) — ↑↓ Enter Esc", app.session_picker.len());
     let list =
         List::new(items).block(theme::popup_block(&title, false).padding(Padding::horizontal(1)));
     f.render_widget(list, area);

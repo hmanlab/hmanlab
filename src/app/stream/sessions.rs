@@ -4,7 +4,7 @@
 use crate::api::{ApiOp, Message, Session};
 use crate::ollama::ChatMessage;
 
-use super::super::{App, Mode};
+use super::super::{App, Mode, PageState};
 use super::api_message_to_chat;
 
 impl App {
@@ -12,8 +12,7 @@ impl App {
         if rows.is_empty() {
             self.push_info("No saved sessions yet. Send a message to start one.".into());
         } else {
-            self.session_picker_items = rows;
-            self.session_picker_index = 0;
+            self.session_picker.set_items(rows);
             self.mode = Mode::SessionPicker;
             self.status = "↑↓ to navigate · Enter to load · Esc to cancel".into();
         }
@@ -24,10 +23,9 @@ impl App {
         for m in &messages {
             self.messages.push(api_message_to_chat(m));
         }
-        // Fresh session — reset both pagination guards. The previous
-        // session's "no more older" verdict doesn't apply to this one.
-        self.loading_more = false;
-        self.no_more_history = false;
+        // Fresh session — reset pagination. The previous session's
+        // "no more older" verdict doesn't apply to this one.
+        self.page_state = PageState::Idle;
         // The loaded session has its own recorded model, but the
         // user's current selection wins — switching sessions
         // shouldn't silently bounce them off the model they just
@@ -68,16 +66,18 @@ impl App {
     }
 
     pub(super) fn on_more_loaded(&mut self, messages: Vec<Message>) {
-        self.loading_more = false;
         if messages.is_empty() {
             // Tell the user once, then never auto-fire again for this
-            // session — `no_more_history` short-circuits future
+            // session — `Exhausted` short-circuits future
             // `maybe_auto_load_more` calls.
-            self.no_more_history = true;
+            self.page_state = PageState::Exhausted;
             self.push_info("No older messages.".into());
             self.status = "No older messages".into();
             return;
         }
+        // Server returned content; transition back to Idle so the next
+        // scroll-to-top can trigger another /more.
+        self.page_state = PageState::Idle;
         let count = messages.len();
         if let Some(min_id) = messages.iter().map(|m| m.id).min() {
             self.oldest_loaded_msg_id = Some(min_id);

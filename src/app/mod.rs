@@ -6,10 +6,9 @@
 //! file is just the struct + constructor + module wiring + a couple of
 //! tiny shared helpers (`fresh_textarea`, `seed_sidebar_top_level`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
 use crate::api::{self, ApiOp};
@@ -31,9 +30,19 @@ pub mod workspace;
 
 pub use backend::LlmBackend;
 pub use inline::{InlinePopup, SLASH_COMMANDS};
-pub use state::{AddModelStep, AppAction, DisconnectEntry, Mode, PickerEntry};
+pub use state::{
+    AgentsSetupStep, AppAction, DisconnectEntry, Mode, PageState, Picker, PickerEntry, RenderState,
+    TelegramSetupStep, TurnState,
+};
 pub use stream_msg::StreamMsg;
 pub use viewer::OpenFile;
+
+/// How long the terminal must sit untouched before a finished local turn
+/// counts as "the user walked away" and triggers a Telegram notification
+/// (phase 3). 30 s is short enough to fire for a coffee break, long
+/// enough that a quick keypress race with `on_done` doesn't spam paired
+/// devices.
+pub const TELEGRAM_IDLE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
 
 use crate::api::Session;
 
@@ -52,8 +61,43 @@ impl App {
     /// the workspace root and its immediate visible directories. Called once
     /// at startup (from `main`) and again whenever `/workspace` switches.
     pub fn seed_sidebar_top_level(&mut self) {
-        self.expanded_dirs = crate::ui::initial_expanded(&self.workspace, self.workspace_trusted);
+        let trusted = self.workspace_trusted();
+        self.expanded_dirs = crate::ui::initial_expanded(&self.workspace, trusted);
         self.sidebar_scroll = 0;
+    }
+
+    /// Is the current workspace in the user's trusted list? Looked up
+    /// directly each call — O(N) over `trusted_workspaces` which is
+    /// usually <10 entries. Used to be a cached `bool` field, but the
+    /// cache could drift if a write path forgot to refresh it, and the
+    /// lookup is cheap enough that a method is strictly safer.
+    pub fn workspace_trusted(&self) -> bool {
+        self.trusted_workspaces.iter().any(|p| p == &self.workspace)
+    }
+
+    /// Read the BYOK key for a provider (e.g.
+    /// `crate::config::ZAI_SUBSCRIPTION_PROVIDER`). Returns `None` if
+    /// the user hasn't connected this provider.
+    pub fn byok_key(&self, provider: &str) -> Option<&str> {
+        self.byok_keys.get(provider).map(String::as_str)
+    }
+
+    /// True iff a key for `provider` is stored.
+    pub fn has_byok_key(&self, provider: &str) -> bool {
+        self.byok_keys.contains_key(provider)
+    }
+
+    /// Store / overwrite the BYOK key for a provider. Caller is
+    /// responsible for persisting via `persist_config` afterwards.
+    pub fn set_byok_key(&mut self, provider: &str, key: String) {
+        self.byok_keys.insert(provider.to_string(), key);
+    }
+
+    /// Drop the BYOK key for a provider. No-op if unset. Returns the
+    /// removed key so the disconnect path can show "removed: …" or use
+    /// it for any final cleanup.
+    pub fn remove_byok_key(&mut self, provider: &str) -> Option<String> {
+        self.byok_keys.remove(provider)
     }
 }
 
@@ -63,12 +107,16 @@ pub struct App {
     pub models: Vec<String>,
     pub messages: Vec<ChatMessage>,
     pub mode: Mode,
-    pub picker_index: usize,
     pub input: TextArea<'static>,
     pub scroll: u16,
     pub follow: bool,
     pub status: String,
-    pub generating: bool,
+    /// "What's the agent doing right now?" — Idle / Generating /
+    /// Compacting. Replaces the legacy `generating` / `compacting` /
+    /// `current_task` / `compact_task` / `pending_after_compact` field
+    /// cluster (5 fields collapsed to 1 enum with type-enforced
+    /// mutual exclusion).
+    pub turn: TurnState,
     pub workspace: PathBuf,
     pub pending_confirm: Option<tools::ConfirmRequest>,
     /// Armed after the last assistant turn ended with one of the Y/N trigger
@@ -85,44 +133,34 @@ pub struct App {
     /// with the same name (e.g. `glm-4.7` on both z.ai plans) without
     /// the picker / routing getting confused about which one is active.
     pub selected_extra: Option<ExtraModel>,
-    /// z.ai subscription (coding plan) key.
-    pub zai_api_key: Option<String>,
-    /// z.ai usage-based (pay-per-token) key.
-    pub zai_usage_api_key: Option<String>,
-    /// Ollama Cloud API key (Bearer to https://ollama.com). Independent of
-    /// the local Ollama daemon at `client.base`.
-    pub ollama_cloud_api_key: Option<String>,
-    /// OpenCode Zen / Go API key (Bearer to opencode.ai/zen/v1).
-    pub opencode_api_key: Option<String>,
-    /// OpenRouter API key (Bearer to openrouter.ai/api/v1). Meta-provider
-    /// for OpenAI / Anthropic / Google / Llama / DeepSeek / Qwen et al.
-    pub openrouter_api_key: Option<String>,
-    /// Entries rendered by the picker, built each time `open_picker` runs.
-    pub picker_entries: Vec<PickerEntry>,
-    pub add_model_step: AddModelStep,
+    /// All configured BYOK keys, keyed by provider id (matches the
+    /// `*_PROVIDER` constants in `crate::config`). Replaces the legacy
+    /// per-provider `<x>_api_key: Option<String>` cluster — the picker,
+    /// disconnect, settings, and persistence paths now iterate this map
+    /// instead of hand-rolling a 5-arm match per provider. Persisted to
+    /// disk through `Config`'s per-field shape for backwards compat;
+    /// `App::new`'s caller (`main.rs`) does the load-time conversion.
+    pub byok_keys: HashMap<String, String>,
+    /// Entries rendered by the `/model` picker, built each time
+    /// `open_picker` runs. `Picker<T>` packs the cursor index alongside.
+    pub model_picker: Picker<PickerEntry>,
     /// Provider being added in the current AddModel flow.
     pub add_model_provider: String,
     /// Free-text input for the AddModel modal (key or name).
     pub add_model_input: TextArea<'static>,
-    pub session_picker_items: Vec<Session>,
-    pub session_picker_index: usize,
+    /// `/sessions` picker rows + cursor.
+    pub session_picker: Picker<Session>,
     /// Rows shown by the `/disconnect` picker — one per currently-
     /// connected BYOK provider. Rebuilt by `open_disconnect_picker`.
-    pub disconnect_entries: Vec<DisconnectEntry>,
-    pub disconnect_index: usize,
+    pub disconnect_picker: Picker<DisconnectEntry>,
     /// Set when `/load` brings in a saved session, so /more knows where to page from.
     pub loaded_session_id: Option<String>,
     pub oldest_loaded_msg_id: Option<i64>,
-    /// True while a `/more` (manual or auto) request is in flight. Debounces
-    /// scroll-triggered auto-loads so a single scroll gesture fires at most
-    /// one request, and prevents `/more` typed during a load from queueing
-    /// a duplicate.
-    pub loading_more: bool,
-    /// Set after a `MoreLoaded` response arrived empty — there's nothing
-    /// older on the server for this session. Stops the auto-loader from
-    /// hammering the API every time the user lands on `scroll == 0`. Reset
-    /// on `/load`, `/new`, `/clear`.
-    pub no_more_history: bool,
+    /// Pagination state for session-history loading. Replaces the old
+    /// `loading_more` + `no_more_history` bool pair. `Loading` debounces
+    /// scroll-triggered auto-loads; `Exhausted` short-circuits the
+    /// auto-loader after the server confirmed there's nothing older.
+    pub page_state: PageState,
     /// Indices of tool messages currently shown expanded. Tool messages collapse
     /// by default to keep the chat readable; Ctrl+T toggles all of them.
     pub expanded_tools: HashSet<usize>,
@@ -135,17 +173,10 @@ pub struct App {
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
     pub selecting: bool,
-    /// Chat inner geometry from the last render — used for hit testing and
-    /// selection clamping.
-    pub chat_x: u16,
-    pub chat_y: u16,
-    pub chat_w: u16,
-    pub chat_h: u16,
-    /// Plain-text version of each rendered chat line, populated each frame by
-    /// ui.rs so the copy routine can extract the selection.
-    pub rendered_text_lines: Vec<String>,
-    /// Logical line range per message (for click-to-expand on tools).
-    pub message_line_ranges: Vec<(usize, u16, u16)>,
+    /// Renderer-produced, input-consumed scratch state (geometry,
+    /// hit-test tables, hover position). Renderers write here every
+    /// frame; mouse / keyboard handlers read on the next event.
+    pub render: RenderState,
     /// Running token tally for the current session (resets on /new and /clear).
     pub total_prompt_tokens: u64,
     pub total_completion_tokens: u64,
@@ -154,17 +185,6 @@ pub struct App {
     /// [`compact::AUTO_COMPACT_THRESHOLD`], the next user message is
     /// queued behind a compaction pass.
     pub last_prompt_tokens: u32,
-    /// True while a compaction call is in flight. Blocks concurrent
-    /// generation, prevents re-entry, and gates UI affordances.
-    pub compacting: bool,
-    /// JoinHandle for the in-flight compaction task — abort target for
-    /// `cancel()` and the cleanup point after CompactionDone.
-    pub(super) compact_task: Option<JoinHandle<()>>,
-    /// If auto-compaction was triggered by a user message, that message is
-    /// stored here while the compaction runs. After `CompactionDone` the
-    /// stream handler re-issues it via `send_to_llm` so the user's intent
-    /// isn't lost.
-    pub pending_after_compact: Option<String>,
     /// Monotonic counter incremented by the ~120 ms ticker in `main::run` while
     /// the agent is generating or a tool is running. Drives the breathing-color
     /// animation in `ui::chat`; stays still when the app is idle.
@@ -177,18 +197,6 @@ pub struct App {
     /// occupies the chat column and intercepts keys (Esc closes; PgUp/Down
     /// scroll). Cleared when the user closes or quits.
     pub open_file: Option<OpenFile>,
-    /// Sidebar inner geometry stashed each frame so the mouse handler can
-    /// hit-test clicks against the rendered tree.
-    pub sidebar_x: u16,
-    pub sidebar_y: u16,
-    pub sidebar_w: u16,
-    pub sidebar_h: u16,
-    /// One row per visible sidebar entry — the **logical line index** (NOT
-    /// screen Y), the absolute path, and whether it's a directory. Populated
-    /// by `ui::sidebar` each frame. The click handler converts a screen row
-    /// into the matching logical line via `(screen_y - sidebar_y) +
-    /// sidebar_scroll` before looking up an entry here.
-    pub sidebar_targets: Vec<(u16, PathBuf, bool)>,
     /// Directories the user has expanded in the sidebar. Workspace root is
     /// pre-seeded so the walker can use a single membership check at every
     /// level. Cleared and re-seeded on `/workspace`.
@@ -196,9 +204,12 @@ pub struct App {
     /// Logical-line scroll offset for the sidebar (0 = top). Clamped to a
     /// valid range each frame by the renderer.
     pub sidebar_scroll: u16,
-    /// JoinHandle for the agent task. Submodules need access to abort/clear it
-    /// when the user cancels or a turn finishes; package-private so we can.
-    pub(super) current_task: Option<JoinHandle<()>>,
+    /// Cached output of the last sidebar `walk` pass. The renderer
+    /// rebuilds it only when `(expanded_dirs, workspace,
+    /// workspace_trusted)` changes — otherwise this is reused frame-to-
+    /// frame so we don't pay a sync `read_dir` per expanded directory
+    /// on every redraw. Opaque to App; ui::sidebar owns the structure.
+    pub sidebar_snapshot: Option<crate::ui::SidebarSnapshot>,
     pub api: Option<api::Client>,
     pub api_tx: Option<mpsc::UnboundedSender<ApiOp>>,
     /// Newer hmanlab version advertised by npm, if the background
@@ -215,32 +226,171 @@ pub struct App {
     /// "refresh" actually refreshes rather than stacking placeholders.
     pub pending_settings_msg_idx: Option<usize>,
     /// Absolute workspace paths the user has explicitly authorised via
-    /// `/trust`. Persisted in `~/.config/hmanlab/config.json`.
+    /// `/trust`. Persisted in `~/.config/hmanlab/config.json`. Use
+    /// `App::workspace_trusted()` to check whether the active
+    /// workspace is on this list.
     pub trusted_workspaces: Vec<PathBuf>,
-    /// Cached "is `self.workspace` in `trusted_workspaces`" — recomputed
-    /// whenever either side changes (startup, `/workspace`, `/trust`,
-    /// `/untrust`). Used by the confirm interceptor in `app::stream`.
-    pub workspace_trusted: bool,
     /// Scroll offset (in rendered lines) for the confirm popup body.
     /// Reset to 0 on each new ConfirmRequest; ↑↓/PgUp/PgDn move it in
     /// `handle_confirm`; clamped to a valid max by the renderer.
     pub confirm_scroll: u16,
-    /// Last mouse cursor position observed from `MouseEventKind::Moved`
-    /// events. Used by the chat renderer to highlight the hovered "reading
-    /// N files" card row so users see it's clickable without needing a
-    /// chevron or arrow icon. `(0, 0)` until the first Move event arrives.
-    pub hover_x: u16,
-    pub hover_y: u16,
-    /// One row per card file entry rendered this frame: logical line
-    /// index (NOT screen Y) + the message index it represents. Populated
-    /// by `ui::chat` each frame; consumed by the same renderer after the
-    /// paragraph is laid out to paint the hover overlay.
-    pub card_row_targets: Vec<(u16, usize)>,
-    /// Inner content width of the input box (cols), populated each frame
-    /// by `chat::render_input`. The input event handler reads this to
-    /// know when a typed character would push the current line past the
-    /// visible edge and a soft-wrap should kick in.
-    pub input_inner_w: u16,
+
+    /// Telegram bot state, all in one bag because none of it makes sense
+    /// in isolation: token without channels is unused, channels without
+    /// allowlist let strangers in, etc. `None` until `/telegram setup`
+    /// runs (or until startup spawns the bot from a saved token).
+    pub telegram: Option<TelegramRuntime>,
+    /// Most recent line emitted by the bot task — "bot online", error,
+    /// etc. `/telegram status` prints this verbatim. Captured separately
+    /// from `telegram` because we want to retain the last error even
+    /// after `off` tears down the runtime.
+    pub telegram_last_status: Option<String>,
+    /// Set when the current in-flight assistant turn was triggered by an
+    /// incoming Telegram DM. `on_done` / `on_error` look here to decide
+    /// whether to forward the reply back to Telegram. Cleared on
+    /// completion, cancel, or compaction reset.
+    pub pending_telegram_reply_chat: Option<i64>,
+    /// Human-readable label for the Telegram sender currently being
+    /// replied to ("@alice"). Surfaces in the status line while we're
+    /// generating so the local user knows "this turn is for Telegram".
+    pub pending_telegram_reply_from: Option<String>,
+    /// Mirror of `Config::telegram_notify_on_idle`. Held on App so the
+    /// hot path in `on_done` doesn't have to touch disk to decide
+    /// whether to notify.
+    pub telegram_notify_on_idle: bool,
+    /// Wall-clock timestamp of the most recent local key press. `None`
+    /// means no keypress has been observed yet this session (treated as
+    /// "not idle" so we don't blast a notification on boot). Stamped in
+    /// `handle_event`'s key arm.
+    pub last_keypress_at: Option<std::time::Instant>,
+    /// Which step of the `/telegram` wizard is showing while
+    /// `mode == Mode::TelegramSetup`. Ignored otherwise.
+    pub telegram_setup_step: TelegramSetupStep,
+    /// Textarea backing the active step's input (token on step 1, pair
+    /// code on step 2). Reset when the modal opens.
+    pub telegram_setup_input: TextArea<'static>,
+    /// Inline error line rendered under the input on the modal — set
+    /// when validation fails (bad token / unknown code) so the user
+    /// sees what went wrong without dismissing the wizard.
+    pub telegram_setup_error: Option<String>,
+    /// True from "user pressed Enter on Token" until `getMe` resolves.
+    /// Renderer reads this to swap the input for a "validating…" line
+    /// and freeze the keyboard handler against double-submits.
+    pub telegram_setup_validating: bool,
+    /// Set while a tool wants user confirmation AND the triggering
+    /// turn came in over Telegram. Holds the chat we DM'd, the
+    /// `message_id` of the prompt (filled in by
+    /// `TelegramConfirmSent`), the random `callback_token` encoded
+    /// into the button payloads, and the first word of the prompt
+    /// (used to extend `telegram_always_allow` when the user picks
+    /// the Always button). Cleared whichever side answers first.
+    pub pending_telegram_confirm: Option<TelegramConfirmContext>,
+    /// Session-only set of "tool head" strings the user has tagged
+    /// with Always. Subsequent `on_confirm_request` calls whose
+    /// prompt starts with any of these auto-allow silently (with a
+    /// DM ack). Not persisted — clears on TUI restart, matching
+    /// OpenClaw's "always for this session" semantics.
+    pub telegram_always_allow: HashSet<String>,
+    /// Roster of named specialist agents loaded from config. The user
+    /// edits these via the `/agents` wizard; persistence happens through
+    /// `persist_config`. Mirrors `Config.agents` 1-to-1.
+    pub agents: crate::config::AgentsConfig,
+    /// Session-level enable flag for specialist consultation. False at
+    /// boot; `/agents on` flips it. While false, `/ask` refuses and
+    /// the (phase 2) `consult_specialist` tool is hidden from the main
+    /// agent's tool list. Per-session by design — no surprise double-
+    /// spend across restarts.
+    pub agents_session_enabled: bool,
+    /// Per-specialist (prompt, completion) token totals, keyed by name.
+    /// The status line shows a per-agent breakdown whenever this map
+    /// has at least one entry. Reset on `/clear` / `/new`.
+    pub agent_token_tally: std::collections::HashMap<String, (u64, u64)>,
+    /// Which step of the `/agents` wizard is showing while
+    /// `mode == Mode::AgentsSetup`. Ignored otherwise.
+    pub agents_setup_step: AgentsSetupStep,
+    /// Whether the in-flight wizard is editing an existing specialist
+    /// (`Some(original_name)`) or adding a new one (`None`). On commit,
+    /// `Some` replaces the original entry instead of appending.
+    pub agents_setup_editing: Option<String>,
+    /// Scratch buffer for the four wizard fields. Filled in step-by-
+    /// step as the user advances; persisted only when the user reaches
+    /// the final step and presses Enter.
+    pub agents_setup_draft: AgentsDraft,
+    /// Currently-focused row in the model picker step of the wizard
+    /// (Ollama + BYOK lines, both sourced live from `models` +
+    /// `extra_models`). Re-clamped on each render.
+    pub agents_setup_picker_index: usize,
+    /// Free-form textarea used by the Name/Task/Prompt steps. Reset on
+    /// every step transition so each input starts clean.
+    pub agents_setup_input: TextArea<'static>,
+    /// Most recent validation error from the wizard (e.g. duplicate
+    /// name, roster full). Rendered as a red inline line and cleared
+    /// on the next keystroke.
+    pub agents_setup_error: Option<String>,
+    /// Name of the specialist currently being addressed by `/ask`.
+    /// `Some` while the specialist's task is in flight (controls token
+    /// attribution + the "[name] working…" status line), `None`
+    /// otherwise. Cleared in `on_done` / `on_error` / `cancel`.
+    pub active_specialist: Option<String>,
+}
+
+/// Wizard scratch — what the user has typed across the four steps. On
+/// commit, this becomes a [`crate::config::SpecialistAgent`]. The
+/// `model_provider` field stores `Some(provider_id)` for BYOK and
+/// `None` for Ollama, matching `SpecialistAgent.provider`.
+#[derive(Clone, Debug, Default)]
+pub struct AgentsDraft {
+    pub name: String,
+    pub model: String,
+    pub model_provider: Option<String>,
+    pub task: String,
+    pub system_prompt: String,
+}
+
+/// In-flight Telegram confirm bridge. Built by `on_confirm_request`
+/// when the active turn is Telegram-triggered; consumed by
+/// `handle_telegram_callback` / `handle_confirm` whichever side fires
+/// first.
+pub struct TelegramConfirmContext {
+    pub chat_id: i64,
+    /// `None` between sending the prompt and receiving
+    /// `TelegramConfirmSent`. The `editMessageText` path skips itself
+    /// when this is still `None` (rare race; the local side will
+    /// still push_info either way).
+    pub message_id: Option<i64>,
+    /// Opaque token encoded into the button payloads. Match against
+    /// incoming `TelegramCallback` to confirm this is the prompt
+    /// the user tapped (not a stale one from a prior turn).
+    pub callback_token: String,
+    /// First whitespace-delimited word of `ConfirmRequest.prompt` —
+    /// e.g. `"run_command:"` → `"run_command"`. Drives the Always
+    /// allowlist match in `on_confirm_request`.
+    pub prompt_head: String,
+}
+
+/// Live Telegram bot handles. Created by `/telegram setup` (or at
+/// startup if a token is already in config) and torn down by
+/// `/telegram off`.
+pub struct TelegramRuntime {
+    /// The active bot token. Held here so `/telegram status` can show
+    /// who's online and so a second `setup` knows whether to restart.
+    pub token: String,
+    /// Bot's @username from `getMe`. Cached so status doesn't have to
+    /// re-call the API.
+    pub bot_username: Option<String>,
+    /// Allowlist of paired Telegram user IDs. Wrapped in `Arc<Mutex>`
+    /// because the bot task reads it on every incoming DM and
+    /// `/telegram pair` mutates it.
+    pub allowlist: std::sync::Arc<std::sync::Mutex<Vec<i64>>>,
+    /// Shared pending-codes map (the bot writes; `/telegram pair`
+    /// redeems).
+    pub pending: crate::telegram::PendingCodes,
+    /// Outbound DM channel — `/telegram pair` uses this to send the
+    /// "✓ paired" confirmation back to the user.
+    pub out_tx: mpsc::UnboundedSender<crate::telegram::TelegramOut>,
+    /// Control channel — `/telegram off` sends `Shutdown` to stop the
+    /// long-poll task cleanly.
+    pub ctl_tx: mpsc::UnboundedSender<crate::telegram::TelegramCtl>,
 }
 
 impl App {
@@ -275,75 +425,70 @@ impl App {
             models,
             messages: Vec::new(),
             mode: Mode::Chat,
-            picker_index: 0,
             input,
             scroll: 0,
             follow: true,
             status,
-            generating: false,
+            turn: TurnState::Idle,
             workspace,
             pending_confirm: None,
             yn_pending: false,
             awaiting_yn_followup: false,
             extra_models: Vec::new(),
             selected_extra: None,
-            zai_api_key: None,
-            zai_usage_api_key: None,
-            ollama_cloud_api_key: None,
-            opencode_api_key: None,
-            openrouter_api_key: None,
-            picker_entries: Vec::new(),
-            add_model_step: AddModelStep::Key,
+            byok_keys: HashMap::new(),
+            model_picker: Picker::default(),
             add_model_provider: crate::config::ZAI_SUBSCRIPTION_PROVIDER.to_string(),
             add_model_input: fresh_textarea(),
-            session_picker_items: Vec::new(),
-            session_picker_index: 0,
-            disconnect_entries: Vec::new(),
-            disconnect_index: 0,
+            session_picker: Picker::default(),
+            disconnect_picker: Picker::default(),
             loaded_session_id: None,
             oldest_loaded_msg_id: None,
-            loading_more: false,
-            no_more_history: false,
+            page_state: PageState::Idle,
             expanded_tools: HashSet::new(),
             expanded_thoughts: HashSet::new(),
             sel_start: None,
             sel_end: None,
             selecting: false,
-            chat_x: 0,
-            chat_y: 0,
-            chat_w: 0,
-            chat_h: 0,
-            rendered_text_lines: Vec::new(),
-            message_line_ranges: Vec::new(),
+            render: RenderState::default(),
             total_prompt_tokens: 0,
             total_completion_tokens: 0,
             last_prompt_tokens: 0,
-            compacting: false,
-            compact_task: None,
-            pending_after_compact: None,
             anim_tick: 0,
             active_tool_msg_idx: None,
             open_file: None,
-            sidebar_x: 0,
-            sidebar_y: 0,
-            sidebar_w: 0,
-            sidebar_h: 0,
-            sidebar_targets: Vec::new(),
             expanded_dirs: HashSet::new(),
             sidebar_scroll: 0,
-            current_task: None,
+            sidebar_snapshot: None,
             api,
             api_tx,
             update_available: None,
             inline_popup: InlinePopup::None,
             pending_settings_msg_idx: None,
             trusted_workspaces: Vec::new(),
-            workspace_trusted: false,
             confirm_scroll: 0,
-            hover_x: 0,
-            hover_y: 0,
-            card_row_targets: Vec::new(),
-            input_inner_w: 0,
+            telegram: None,
+            telegram_last_status: None,
+            pending_telegram_reply_chat: None,
+            pending_telegram_reply_from: None,
+            telegram_notify_on_idle: false,
+            last_keypress_at: None,
+            telegram_setup_step: TelegramSetupStep::Token,
+            telegram_setup_input: fresh_textarea(),
+            telegram_setup_error: None,
+            telegram_setup_validating: false,
+            pending_telegram_confirm: None,
+            telegram_always_allow: HashSet::new(),
+            agents: crate::config::AgentsConfig::default(),
+            agents_session_enabled: false,
+            agent_token_tally: std::collections::HashMap::new(),
+            agents_setup_step: AgentsSetupStep::Name,
+            agents_setup_editing: None,
+            agents_setup_draft: AgentsDraft::default(),
+            agents_setup_picker_index: 0,
+            agents_setup_input: fresh_textarea(),
+            agents_setup_error: None,
+            active_specialist: None,
         }
     }
 }

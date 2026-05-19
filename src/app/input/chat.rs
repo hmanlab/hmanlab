@@ -70,7 +70,7 @@ impl App {
         // Y/N quick-reply intercept — only when the AI just asked a yes/no
         // question and the input is empty. Plain key, no modifiers.
         if self.yn_pending
-            && !self.generating
+            && !self.turn.is_generating()
             && key.modifiers.is_empty()
             && self.input.lines().iter().all(|l| l.is_empty())
         {
@@ -102,7 +102,7 @@ impl App {
             match key.code {
                 KeyCode::Char('q') => return AppAction::Quit,
                 KeyCode::Char('c') => {
-                    if self.generating {
+                    if self.turn.is_generating() {
                         self.cancel();
                     } else {
                         return AppAction::Quit;
@@ -144,7 +144,7 @@ impl App {
             // then no-op. Quit stays available via /quit, /exit, Ctrl+Q,
             // and Ctrl+C (when nothing's running).
             KeyCode::Esc => {
-                if self.generating {
+                if self.turn.is_generating() {
                     self.cancel();
                 } else {
                     let has_text = self.input.lines().iter().any(|l| !l.is_empty());
@@ -201,7 +201,7 @@ impl App {
                 // checking only Shift) because most terminals collapse
                 // Shift+Enter to plain Enter, so without explicit Alt /
                 // Ctrl backups there's no way to insert a newline at all.
-                if !self.generating {
+                if !self.turn.is_generating() {
                     return self.submit(tx);
                 }
                 return AppAction::Continue;
@@ -267,7 +267,7 @@ impl App {
     /// back to a hard break at the column limit. Skips when the input
     /// box is too narrow for wrap to make sense (<10 cols).
     fn soft_wrap_input(&mut self) {
-        let max_w = self.input_inner_w as usize;
+        let max_w = self.render.input_inner_w as usize;
         if max_w < 10 {
             return;
         }
@@ -326,7 +326,7 @@ impl App {
                     self.inline_popup = InlinePopup::File(FilePopup::new(
                         filter,
                         &self.workspace,
-                        self.workspace_trusted,
+                        self.workspace_trusted(),
                     ));
                 }
             },

@@ -11,7 +11,69 @@
 use serde_json::json;
 use std::path::Path;
 
+use crate::agent::SpecialistRunner;
 use crate::ollama::Tool;
+
+/// Build the live tool surface for the main agent. Wraps
+/// [`tool_definitions`] with a conditional `consult_specialist` entry —
+/// registered only when there's at least one specialist available, so
+/// the model never sees a tool it can't call. The description embeds
+/// the per-specialist `task` lines so the main model knows when each
+/// route makes sense.
+pub fn tool_definitions_with(specialists: &[SpecialistRunner]) -> Vec<Tool> {
+    let mut defs = tool_definitions();
+    if specialists.is_empty() {
+        return defs;
+    }
+
+    let roster = specialists
+        .iter()
+        .map(|s| format!("- {}: {}", s.name, s.task))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let names: Vec<String> = specialists.iter().map(|s| s.name.clone()).collect();
+    let desc = format!(
+        "Consult another model with a different specialty. The specialist runs in an \
+         ISOLATED context (it does NOT see this conversation), but it has its OWN \
+         read-only tools: `read_file`, `list_dir`, `find_files`, `git_status`, \
+         `git_log`, `git_diff`, `git_show`, `read_memory`. The specialist returns \
+         one consolidated reply you can use.\n\n\
+         Available specialists:\n{roster}\n\n\
+         DELEGATION RULES (read carefully — these matter):\n\
+         1. Pass `query` as a short task instruction, ONE paragraph max. Reference \
+            file PATHS, never paste file contents — the specialist reads them itself.\n\
+         2. DO NOT `read_file` (or any read tool) yourself just to paste the result \
+            into `query`. That duplicates work and wastes tokens. The whole point of \
+            delegating is to hand off the reading too.\n\
+         3. Include ONLY decisions, constraints, and prior conclusions the specialist \
+            needs — never raw source. The specialist will fetch what it needs.\n\
+         4. When chaining specialists (A → B → C), pass each one paths + the prior \
+            specialist's *conclusion*, not the file contents they read.\n\n\
+         Good query: \"Read src/agent.rs and list every function with a one-line role.\"\n\
+         Bad query: \"Here is the file: ```rust\\n...3000 chars...\\n```\""
+    );
+
+    defs.push(Tool::function(
+        "consult_specialist",
+        &desc,
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "enum": names,
+                    "description": "Which specialist to consult. Must be one of the names listed above."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Short task instruction (one paragraph). Reference file paths — the specialist has its own read_file. NEVER paste file contents here."
+                }
+            },
+            "required": ["name", "query"]
+        }),
+    ));
+    defs
+}
 
 pub fn tool_definitions() -> Vec<Tool> {
     vec![
@@ -437,4 +499,82 @@ fn memory_section(workspace: &Path) -> String {
         );
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::SpecialistRunner;
+    use crate::app::LlmBackend;
+    use crate::ollama::Client;
+
+    fn dummy_runner(name: &str, task: &str) -> SpecialistRunner {
+        SpecialistRunner {
+            name: name.into(),
+            model: "test-model".into(),
+            task: task.into(),
+            system_prompt: "test-prompt".into(),
+            backend: LlmBackend::Ollama(Client::new("http://127.0.0.1:0".into())),
+        }
+    }
+
+    fn has_tool(defs: &[crate::ollama::Tool], name: &str) -> bool {
+        defs.iter().any(|t| t.function.name == name)
+    }
+
+    #[test]
+    fn empty_specialists_omits_consult_tool() {
+        // No runners → no `consult_specialist` registration. The main
+        // model never sees a tool it can't actually use.
+        let defs = tool_definitions_with(&[]);
+        assert!(!has_tool(&defs, "consult_specialist"));
+        // Sanity: the standard tools are still there.
+        assert!(has_tool(&defs, "read_file"));
+        assert!(has_tool(&defs, "edit_file"));
+    }
+
+    #[test]
+    fn nonempty_specialists_appends_consult_tool() {
+        let runners = vec![
+            dummy_runner("coder", "use when writing code"),
+            dummy_runner("reviewer", "use when reviewing changes"),
+        ];
+        let defs = tool_definitions_with(&runners);
+        assert!(has_tool(&defs, "consult_specialist"));
+        // The standard tools are still there too.
+        assert!(has_tool(&defs, "read_file"));
+    }
+
+    #[test]
+    fn consult_tool_embeds_specialist_roster() {
+        // Both the description and the `enum` of the `name` parameter
+        // must mention each specialist by name so the model can pick.
+        let runners = vec![
+            dummy_runner("coder", "use when writing code"),
+            dummy_runner("reviewer", "use when reviewing"),
+        ];
+        let defs = tool_definitions_with(&runners);
+        let consult = defs
+            .iter()
+            .find(|t| t.function.name == "consult_specialist")
+            .expect("consult tool registered");
+
+        assert!(consult.function.description.contains("coder"));
+        assert!(consult.function.description.contains("reviewer"));
+        assert!(consult
+            .function
+            .description
+            .contains("use when writing code"));
+
+        let name_enum = consult
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.get("enum"))
+            .and_then(|e| e.as_array())
+            .expect("enum array on name param");
+        let names: Vec<&str> = name_enum.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(names, vec!["coder", "reviewer"]);
+    }
 }

@@ -62,32 +62,23 @@ impl App {
             return;
         }
         self.workspace = canonical;
-        // Refresh trust BEFORE seeding the sidebar — the seed walk's
-        // dotfile visibility depends on `workspace_trusted`, so flipping
-        // the order would leave a trusted workspace's dotfiles hidden
-        // until the next manual collapse/expand.
-        self.refresh_workspace_trust();
         // Sidebar state belongs to the previous workspace — reset it so the
         // new workspace gets its own top-level expansion and a fresh scroll
         // position. Without this, the picker would still hold paths from
-        // the old tree that no longer exist in the new one.
+        // the old tree that no longer exist in the new one. `seed` reads
+        // `workspace_trusted()` so the dotfile-visibility decision picks
+        // up the new workspace's trust state automatically.
         self.seed_sidebar_top_level();
         self.push_info(format!("Workspace: {}", self.workspace.display()));
-        if !self.workspace_trusted {
+        if !self.workspace_trusted() {
             self.push_info(workspace_trust_banner(&self.workspace));
         }
         self.status = format!("Workspace: {}", self.workspace.display());
     }
 
-    /// Recompute `workspace_trusted` from the persisted list. Call after
-    /// `self.workspace` changes (startup, `/workspace`, `/trust`, `/untrust`).
-    pub(super) fn refresh_workspace_trust(&mut self) {
-        self.workspace_trusted = self.trusted_workspaces.iter().any(|p| p == &self.workspace);
-    }
-
     /// Mark the current workspace as trusted and persist it to config.
     pub(super) fn trust_current_workspace(&mut self) {
-        if self.workspace_trusted {
+        if self.workspace_trusted() {
             self.push_info(format!(
                 "Workspace already trusted: {}",
                 self.workspace.display()
@@ -95,7 +86,6 @@ impl App {
             return;
         }
         self.trusted_workspaces.push(self.workspace.clone());
-        self.workspace_trusted = true;
         // Re-seed the sidebar so dotfiles (.env, .hmanlab, etc.) become
         // visible immediately — without this the tree only refreshes on
         // a manual collapse/expand or workspace switch.
@@ -123,7 +113,6 @@ impl App {
             ));
             return;
         }
-        self.workspace_trusted = false;
         // Re-seed so the sidebar hides dotfiles again now that they're no
         // longer authorised — keeps the visible tree consistent with what
         // the agent can actually touch.

@@ -62,15 +62,7 @@ impl App {
     pub(in crate::app) fn disconnect_by_id(&mut self, provider_id: &str) {
         // No-op guard so the user gets a clean message rather than a
         // silent "removed 0 things".
-        let key_present = match provider_id {
-            p if p == crate::config::ZAI_SUBSCRIPTION_PROVIDER => self.zai_api_key.is_some(),
-            p if p == crate::config::ZAI_USAGE_PROVIDER => self.zai_usage_api_key.is_some(),
-            p if p == crate::config::OLLAMA_CLOUD_PROVIDER => self.ollama_cloud_api_key.is_some(),
-            p if p == crate::config::OPENCODE_PROVIDER => self.opencode_api_key.is_some(),
-            p if p == crate::config::OPENROUTER_PROVIDER => self.openrouter_api_key.is_some(),
-            _ => false,
-        };
-        if !key_present {
+        if !self.has_byok_key(provider_id) {
             self.push_info(format!(
                 "'{provider_id}' isn't connected — nothing to disconnect."
             ));
@@ -78,14 +70,7 @@ impl App {
         }
 
         // Clear the key on App; persist_config later flushes it to disk.
-        match provider_id {
-            p if p == crate::config::ZAI_SUBSCRIPTION_PROVIDER => self.zai_api_key = None,
-            p if p == crate::config::ZAI_USAGE_PROVIDER => self.zai_usage_api_key = None,
-            p if p == crate::config::OLLAMA_CLOUD_PROVIDER => self.ollama_cloud_api_key = None,
-            p if p == crate::config::OPENCODE_PROVIDER => self.opencode_api_key = None,
-            p if p == crate::config::OPENROUTER_PROVIDER => self.openrouter_api_key = None,
-            _ => {}
-        }
+        self.remove_byok_key(provider_id);
 
         // Sweep the matching extra-model rows out of the picker source.
         let removed = self
@@ -137,40 +122,14 @@ impl App {
                 format!("{}, +{} more", names[..3].join(", "), names.len() - 3)
             }
         };
-        if self.zai_api_key.is_some() {
-            entries.push(DisconnectEntry {
-                provider: crate::config::ZAI_SUBSCRIPTION_PROVIDER.to_string(),
-                label: "z.ai subscription".to_string(),
-                preview: preview(crate::config::ZAI_SUBSCRIPTION_PROVIDER, &self.extra_models),
-            });
-        }
-        if self.zai_usage_api_key.is_some() {
-            entries.push(DisconnectEntry {
-                provider: crate::config::ZAI_USAGE_PROVIDER.to_string(),
-                label: "z.ai usage-based".to_string(),
-                preview: preview(crate::config::ZAI_USAGE_PROVIDER, &self.extra_models),
-            });
-        }
-        if self.ollama_cloud_api_key.is_some() {
-            entries.push(DisconnectEntry {
-                provider: crate::config::OLLAMA_CLOUD_PROVIDER.to_string(),
-                label: "Ollama Cloud".to_string(),
-                preview: preview(crate::config::OLLAMA_CLOUD_PROVIDER, &self.extra_models),
-            });
-        }
-        if self.opencode_api_key.is_some() {
-            entries.push(DisconnectEntry {
-                provider: crate::config::OPENCODE_PROVIDER.to_string(),
-                label: "OpenCode Go".to_string(),
-                preview: preview(crate::config::OPENCODE_PROVIDER, &self.extra_models),
-            });
-        }
-        if self.openrouter_api_key.is_some() {
-            entries.push(DisconnectEntry {
-                provider: crate::config::OPENROUTER_PROVIDER.to_string(),
-                label: "OpenRouter".to_string(),
-                preview: preview(crate::config::OPENROUTER_PROVIDER, &self.extra_models),
-            });
+        for provider in crate::config::BYOK_PROVIDERS {
+            if self.has_byok_key(provider) {
+                entries.push(DisconnectEntry {
+                    provider: (*provider).to_string(),
+                    label: crate::config::provider_label(provider).to_string(),
+                    preview: preview(provider, &self.extra_models),
+                });
+            }
         }
         if entries.is_empty() {
             self.push_info(
@@ -178,8 +137,7 @@ impl App {
             );
             return;
         }
-        self.disconnect_entries = entries;
-        self.disconnect_index = 0;
+        self.disconnect_picker.set_items(entries);
         self.mode = Mode::DisconnectPicker;
         self.status = "↑↓ to navigate · Enter to disconnect · Esc to cancel".into();
     }
@@ -190,20 +148,12 @@ impl App {
                 self.mode = Mode::Chat;
                 self.status = "Disconnect cancelled".into();
             }
-            KeyCode::Up | KeyCode::Char('k') if self.disconnect_index > 0 => {
-                self.disconnect_index -= 1;
-            }
-            KeyCode::Down | KeyCode::Char('j')
-                if self.disconnect_index + 1 < self.disconnect_entries.len() =>
-            {
-                self.disconnect_index += 1;
-            }
-            KeyCode::Home => self.disconnect_index = 0,
-            KeyCode::End => {
-                self.disconnect_index = self.disconnect_entries.len().saturating_sub(1);
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.disconnect_picker.select_prev(),
+            KeyCode::Down | KeyCode::Char('j') => self.disconnect_picker.select_next(),
+            KeyCode::Home => self.disconnect_picker.select_first(),
+            KeyCode::End => self.disconnect_picker.select_last(),
             KeyCode::Enter => {
-                if let Some(entry) = self.disconnect_entries.get(self.disconnect_index).cloned() {
+                if let Some(entry) = self.disconnect_picker.selected().cloned() {
                     self.mode = Mode::Chat;
                     self.disconnect_by_id(&entry.provider);
                 }

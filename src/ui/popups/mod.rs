@@ -17,18 +17,22 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 mod add_model;
+mod agents_setup;
 mod confirm;
 mod disconnect;
 mod inline;
 mod picker;
 mod sessions;
+mod telegram_setup;
 
 pub(super) use add_model::render_add_model;
+pub(super) use agents_setup::render_agents_setup;
 pub(super) use confirm::render_confirm;
 pub(super) use disconnect::render_disconnect_picker;
 pub(super) use inline::render_inline_popup;
 pub(super) use picker::render_picker;
 pub(super) use sessions::render_session_picker;
+pub(super) use telegram_setup::render_telegram_setup;
 
 /// Centre a (`percent_x` % wide, `percent_y` % tall) rectangle inside `r`.
 /// Used by every full-screen popup so they all share the same anchoring.

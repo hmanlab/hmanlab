@@ -38,28 +38,35 @@ impl App {
         }
     }
 
-    /// Build the LLM backend to use for the current `self.model`.
+    /// Build the LLM backend to use for the current `self.model`. Thin
+    /// wrapper around [`Self::make_backend_for`] that reads the active
+    /// model's provider off `self.selected_extra`.
     pub fn make_backend(&self) -> Option<LlmBackend> {
-        let Some(em) = self.selected_extra.as_ref() else {
+        let provider = self.selected_extra.as_ref().map(|e| e.provider.as_str());
+        self.make_backend_for(provider)
+    }
+
+    /// Build a backend for an arbitrary provider, NOT necessarily the
+    /// active one. Used by the specialist agents (`/ask`, and phase 2's
+    /// `consult_specialist` tool) so they can run on a different model
+    /// without touching `self.model` / `self.selected_extra`. Pass
+    /// `None` for local Ollama; pass `Some(provider_id)` (one of the
+    /// `*_PROVIDER` constants from `crate::config`) for a BYOK provider.
+    pub fn make_backend_for(&self, provider: Option<&str>) -> Option<LlmBackend> {
+        let Some(provider) = provider else {
             return Some(LlmBackend::Ollama(self.client.clone()));
         };
-        match em.provider.as_str() {
-            ZAI_SUBSCRIPTION_PROVIDER => {
-                let key = self.zai_api_key.clone()?;
-                Some(LlmBackend::OpenAi(openai_compat::Client::new(
-                    ZAI_SUBSCRIPTION_BASE.to_string(),
-                    key,
-                )))
-            }
-            ZAI_USAGE_PROVIDER => {
-                let key = self.zai_usage_api_key.clone()?;
-                Some(LlmBackend::OpenAi(openai_compat::Client::new(
-                    ZAI_USAGE_BASE.to_string(),
-                    key,
-                )))
-            }
+        let key = self.byok_key(provider)?.to_string();
+        match provider {
+            ZAI_SUBSCRIPTION_PROVIDER => Some(LlmBackend::OpenAi(openai_compat::Client::new(
+                ZAI_SUBSCRIPTION_BASE.to_string(),
+                key,
+            ))),
+            ZAI_USAGE_PROVIDER => Some(LlmBackend::OpenAi(openai_compat::Client::new(
+                ZAI_USAGE_BASE.to_string(),
+                key,
+            ))),
             OLLAMA_CLOUD_PROVIDER => {
-                let key = self.ollama_cloud_api_key.clone()?;
                 // Cloud Ollama speaks the same native protocol as local
                 // Ollama; only auth + host differ. Reuse the Ollama backend
                 // variant with a Bearer-authed client.
@@ -68,22 +75,48 @@ impl App {
                     key,
                 )))
             }
-            OPENCODE_PROVIDER => {
-                let key = self.opencode_api_key.clone()?;
-                Some(LlmBackend::OpenAi(openai_compat::Client::new(
-                    OPENCODE_BASE.to_string(),
-                    key,
-                )))
-            }
-            OPENROUTER_PROVIDER => {
-                let key = self.openrouter_api_key.clone()?;
-                Some(LlmBackend::OpenAi(openai_compat::Client::new(
-                    OPENROUTER_BASE.to_string(),
-                    key,
-                )))
-            }
+            OPENCODE_PROVIDER => Some(LlmBackend::OpenAi(openai_compat::Client::new(
+                OPENCODE_BASE.to_string(),
+                key,
+            ))),
+            OPENROUTER_PROVIDER => Some(LlmBackend::OpenAi(openai_compat::Client::new(
+                OPENROUTER_BASE.to_string(),
+                key,
+            ))),
             _ => None,
         }
+    }
+
+    /// Build the live specialist roster for this turn — the list passed
+    /// into [`crate::agent::agent_loop_with`] so the `consult_specialist`
+    /// tool can reach them. Returns an empty vec when:
+    ///   - `/agents on` hasn't been run (per-session opt-in),
+    ///   - the roster is empty,
+    ///   - or no enabled specialist has a working backend (missing API key etc).
+    ///
+    /// Specialists with a misconfigured backend are silently filtered —
+    /// surfacing the partial mismatch every turn would be noisy; the
+    /// user can spot the gap via `/agents list` if `consult_specialist`
+    /// later complains "no specialist named X".
+    pub fn live_specialist_runners(&self) -> Vec<crate::agent::SpecialistRunner> {
+        if !self.agents_session_enabled {
+            return Vec::new();
+        }
+        self.agents
+            .specialists
+            .iter()
+            .filter(|s| s.enabled)
+            .filter_map(|s| {
+                let backend = self.make_backend_for(s.provider.as_deref())?;
+                Some(crate::agent::SpecialistRunner {
+                    name: s.name.clone(),
+                    model: s.model.clone(),
+                    task: s.task.clone(),
+                    system_prompt: s.system_prompt.clone(),
+                    backend,
+                })
+            })
+            .collect()
     }
 
     /// Public bridge for main.rs to migrate older configs at startup.
@@ -92,19 +125,19 @@ impl App {
     /// string to `"zai-subscription"` so old configs keep working.
     pub fn ensure_zai_models_pub(&mut self) {
         self.migrate_legacy_zai_provider();
-        if self.zai_api_key.is_some() {
+        if self.has_byok_key(ZAI_SUBSCRIPTION_PROVIDER) {
             self.ensure_zai_models_for(ZAI_SUBSCRIPTION_PROVIDER);
         }
-        if self.zai_usage_api_key.is_some() {
+        if self.has_byok_key(ZAI_USAGE_PROVIDER) {
             self.ensure_zai_models_for(ZAI_USAGE_PROVIDER);
         }
-        if self.ollama_cloud_api_key.is_some() {
+        if self.has_byok_key(OLLAMA_CLOUD_PROVIDER) {
             self.ensure_ollama_cloud_models();
         }
-        if self.opencode_api_key.is_some() {
+        if self.has_byok_key(OPENCODE_PROVIDER) {
             self.ensure_opencode_models();
         }
-        if self.openrouter_api_key.is_some() {
+        if self.has_byok_key(OPENROUTER_PROVIDER) {
             self.ensure_openrouter_models();
         }
         self.persist_config();
@@ -198,10 +231,10 @@ impl App {
     ///   - Free-tier `:free` variants stay — users can pick them
     ///     deliberately when they don't want to spend credits.
     pub fn refresh_openrouter_models(&self, tx: &mpsc::UnboundedSender<StreamMsg>) {
-        if self.openrouter_api_key.is_none() {
+        let Some(key) = self.byok_key(OPENROUTER_PROVIDER).map(str::to_string) else {
             return;
-        }
-        let key = self.openrouter_api_key.clone();
+        };
+        let key = Some(key);
         let tx = tx.clone();
         tokio::spawn(async move {
             let raw = match openai_compat::fetch_openrouter_models(OPENROUTER_BASE, key.as_deref())
@@ -260,14 +293,48 @@ impl App {
 
     /// Write the current BYOK settings back to ~/.config/hmanlab/config.json.
     /// Silent on error — the running state is still consistent.
-    pub(super) fn persist_config(&self) {
-        let mut cfg = crate::config::load().ok().flatten().unwrap_or_default();
-        cfg.zai_api_key = self.zai_api_key.clone();
-        cfg.zai_usage_api_key = self.zai_usage_api_key.clone();
-        cfg.ollama_cloud_api_key = self.ollama_cloud_api_key.clone();
-        cfg.opencode_api_key = self.opencode_api_key.clone();
-        cfg.openrouter_api_key = self.openrouter_api_key.clone();
-        cfg.extra_models = self.extra_models.clone();
-        let _ = crate::config::save(&cfg);
+    ///
+    /// The actual `load + modify + save` sequence runs on a blocking
+    /// worker thread so the UI loop never blocks on disk I/O. A static
+    /// mutex serialises the writes so two persist calls in quick
+    /// succession (e.g. add a BYOK key + auto-seed its models) can't
+    /// race and lose each other's updates — each `spawn_blocking`
+    /// reads the file fresh under the lock and writes back.
+    pub(in crate::app) fn persist_config(&self) {
+        // Snapshot grabs the BYOK map by clone so the writer task is
+        // independent of `&self`. On-disk layout still uses one
+        // `Option<String>` per provider for backwards compat — the
+        // closure below fans `byok_keys` back out into those fields.
+        let snap = PersistSnapshot {
+            byok_keys: self.byok_keys.clone(),
+            extra_models: self.extra_models.clone(),
+            agents: self.agents.clone(),
+        };
+        tokio::task::spawn_blocking(move || {
+            let _g = CONFIG_WRITE_LOCK.lock();
+            let mut cfg = crate::config::load().ok().flatten().unwrap_or_default();
+            cfg.zai_api_key = snap.byok_keys.get(ZAI_SUBSCRIPTION_PROVIDER).cloned();
+            cfg.zai_usage_api_key = snap.byok_keys.get(ZAI_USAGE_PROVIDER).cloned();
+            cfg.ollama_cloud_api_key = snap.byok_keys.get(OLLAMA_CLOUD_PROVIDER).cloned();
+            cfg.opencode_api_key = snap.byok_keys.get(OPENCODE_PROVIDER).cloned();
+            cfg.openrouter_api_key = snap.byok_keys.get(OPENROUTER_PROVIDER).cloned();
+            cfg.extra_models = snap.extra_models;
+            cfg.agents = snap.agents;
+            let _ = crate::config::save(&cfg);
+        });
     }
 }
+
+/// Owned copy of just the fields `persist_config` writes. Moved into
+/// the spawn_blocking closure so the snapshot is independent of the
+/// `&self` borrow. The BYOK map is fanned out into per-provider config
+/// fields inside the closure (config keeps the legacy on-disk shape).
+struct PersistSnapshot {
+    byok_keys: std::collections::HashMap<String, String>,
+    extra_models: Vec<ExtraModel>,
+    agents: crate::config::AgentsConfig,
+}
+
+/// Serialises concurrent `persist_config` calls so the load-modify-save
+/// sequence is atomic across worker threads.
+static CONFIG_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

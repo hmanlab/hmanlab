@@ -20,7 +20,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tokio::sync::mpsc;
 use tui_textarea::Input;
 
-use super::super::{fresh_textarea, AddModelStep, App, AppAction, Mode, PickerEntry, StreamMsg};
+use super::super::{fresh_textarea, App, AppAction, Mode, PickerEntry, StreamMsg};
 
 impl App {
     pub(in crate::app) fn rebuild_picker_entries(&mut self) {
@@ -35,22 +35,12 @@ impl App {
         // Each provider's "+ Add … key" row only appears while that provider
         // is unconfigured. Once a key is saved, the corresponding models
         // already show up in the section above via `extra_models`.
-        if self.zai_api_key.is_none() {
-            entries.push(PickerEntry::AddZaiSubscription);
+        for provider in crate::config::BYOK_PROVIDERS {
+            if !self.has_byok_key(provider) {
+                entries.push(PickerEntry::AddProvider((*provider).to_string()));
+            }
         }
-        if self.zai_usage_api_key.is_none() {
-            entries.push(PickerEntry::AddZaiUsage);
-        }
-        if self.ollama_cloud_api_key.is_none() {
-            entries.push(PickerEntry::AddOllamaCloud);
-        }
-        if self.opencode_api_key.is_none() {
-            entries.push(PickerEntry::AddOpenCode);
-        }
-        if self.openrouter_api_key.is_none() {
-            entries.push(PickerEntry::AddOpenRouter);
-        }
-        self.picker_entries = entries;
+        self.model_picker.set_items(entries);
     }
 
     pub(in crate::app) fn open_picker(&mut self) {
@@ -66,19 +56,16 @@ impl App {
         // model under a different plan (e.g. glm-4.7 on usage vs subscription)
         // doesn't land the cursor on the wrong row.
         let active_provider = self.selected_extra.as_ref().map(|e| e.provider.as_str());
-        self.picker_index = self
-            .picker_entries
+        self.model_picker.index = self
+            .model_picker
+            .items
             .iter()
             .position(|e| match e {
                 PickerEntry::Ollama(n) => active_provider.is_none() && n == &self.model,
                 PickerEntry::Extra(m) => {
                     active_provider.is_some_and(|p| p == m.provider) && m.name == self.model
                 }
-                PickerEntry::AddZaiSubscription
-                | PickerEntry::AddZaiUsage
-                | PickerEntry::AddOllamaCloud
-                | PickerEntry::AddOpenCode
-                | PickerEntry::AddOpenRouter => false,
+                PickerEntry::AddProvider(_) => false,
             })
             .unwrap_or(0);
     }
@@ -88,7 +75,6 @@ impl App {
     /// become available in the picker.
     pub(in crate::app) fn begin_add_model(&mut self, provider: &str) {
         self.add_model_provider = provider.to_string();
-        self.add_model_step = AddModelStep::Key;
         self.add_model_input = fresh_textarea();
         let (placeholder, label) = match provider {
             p if p == crate::config::ZAI_USAGE_PROVIDER => {
@@ -130,32 +116,31 @@ impl App {
                     return AppAction::Continue;
                 }
                 let provider = self.add_model_provider.clone();
+                // Store the key first; per-provider "seed the model list"
+                // dispatch is independent and only differs in what list to
+                // seed and which default model to switch to.
+                self.set_byok_key(&provider, val);
                 // `default_model` is the model the active selection switches
                 // to after saving — chosen per-provider so the user can chat
                 // immediately without re-opening the picker.
                 let (label, default_model) = match provider.as_str() {
                     p if p == crate::config::ZAI_USAGE_PROVIDER => {
-                        self.zai_usage_api_key = Some(val);
                         self.ensure_zai_models_for(&provider);
                         ("z.ai usage-based", crate::config::ZAI_DEFAULT_MODEL)
                     }
                     p if p == crate::config::OLLAMA_CLOUD_PROVIDER => {
-                        self.ollama_cloud_api_key = Some(val);
                         self.ensure_ollama_cloud_models();
                         ("Ollama Cloud", crate::config::OLLAMA_CLOUD_DEFAULT_MODEL)
                     }
                     p if p == crate::config::OPENCODE_PROVIDER => {
-                        self.opencode_api_key = Some(val);
                         self.ensure_opencode_models();
                         ("OpenCode", crate::config::OPENCODE_DEFAULT_MODEL)
                     }
                     p if p == crate::config::OPENROUTER_PROVIDER => {
-                        self.openrouter_api_key = Some(val);
                         self.ensure_openrouter_models();
                         ("OpenRouter", crate::config::OPENROUTER_DEFAULT_MODEL)
                     }
                     _ => {
-                        self.zai_api_key = Some(val);
                         self.ensure_zai_models_for(&provider);
                         ("z.ai subscription", crate::config::ZAI_DEFAULT_MODEL)
                     }

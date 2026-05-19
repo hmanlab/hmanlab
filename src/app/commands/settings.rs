@@ -30,22 +30,11 @@ impl App {
     /// users care about their account and configuration, not plumbing.
     pub(in crate::app) fn show_settings(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
         let current = env!("CARGO_PKG_VERSION");
-        let mut byok = Vec::new();
-        if self.zai_api_key.is_some() {
-            byok.push("z.ai (subscription)");
-        }
-        if self.zai_usage_api_key.is_some() {
-            byok.push("z.ai (usage)");
-        }
-        if self.ollama_cloud_api_key.is_some() {
-            byok.push("Ollama Cloud");
-        }
-        if self.opencode_api_key.is_some() {
-            byok.push("OpenCode");
-        }
-        if self.openrouter_api_key.is_some() {
-            byok.push("OpenRouter");
-        }
+        let byok: Vec<&str> = crate::config::BYOK_PROVIDERS
+            .iter()
+            .filter(|p| self.has_byok_key(p))
+            .map(|p| crate::config::provider_label(p))
+            .collect();
         let byok_line = if byok.is_empty() {
             "none".to_string()
         } else {

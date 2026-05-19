@@ -21,7 +21,7 @@ pub(in crate::ui) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
 
     // Title encodes input mode; border colour echoes it so the box state
     // is scannable from across the screen.
-    let (title, border_color) = if app.generating {
+    let (title, border_color) = if app.turn.is_generating() {
         (
             "▎ generating · Ctrl+C to cancel".to_string(),
             theme::color::WARNING,
@@ -55,6 +55,6 @@ pub(in crate::ui) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
     // Stash the inner content width so the event handler can soft-wrap
     // typed characters before they push the cursor off the right edge.
     // -2 for the rounded borders, -2 for the horizontal padding.
-    app.input_inner_w = area.width.saturating_sub(4);
+    app.render.input_inner_w = area.width.saturating_sub(4);
     f.render_widget(&app.input, area);
 }

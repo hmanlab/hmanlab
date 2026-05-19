@@ -20,7 +20,8 @@ pub(in crate::ui) fn render_picker(f: &mut Frame, full: Rect, app: &App) {
     let area = centered_rect(60, 60, full);
     f.render_widget(Clear, area);
     let items: Vec<ListItem> = app
-        .picker_entries
+        .model_picker
+        .items
         .iter()
         .enumerate()
         .map(|(i, e)| {
@@ -28,13 +29,9 @@ pub(in crate::ui) fn render_picker(f: &mut Frame, full: Rect, app: &App) {
             let entry_color = match e {
                 PickerEntry::Ollama(_) => theme::color::FG,
                 PickerEntry::Extra(_) => theme::color::ASSISTANT,
-                PickerEntry::AddZaiSubscription
-                | PickerEntry::AddZaiUsage
-                | PickerEntry::AddOllamaCloud
-                | PickerEntry::AddOpenCode
-                | PickerEntry::AddOpenRouter => theme::color::USER,
+                PickerEntry::AddProvider(_) => theme::color::USER,
             };
-            let style = if i == app.picker_index {
+            let style = if i == app.model_picker.index {
                 Style::default()
                     .fg(ratatui::style::Color::Black)
                     .bg(theme::color::ACCENT_ALT)

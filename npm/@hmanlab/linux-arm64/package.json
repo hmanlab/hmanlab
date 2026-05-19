@@ -1,6 +1,6 @@
 {
   "name": "@hmanlab/linux-arm64",
-  "version": "0.1.11",
+  "version": "0.2.0",
   "description": "Prebuilt hmanlab binary for linux-arm64. Pulled in automatically by the `hmanlab` package.",
   "homepage": "https://github.com/hmanlab/hmanlab",
   "license": "MIT",

@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::ollama::ChatMessage;
 
-use super::super::{App, StreamMsg};
+use super::super::{App, StreamMsg, TurnState};
 
 impl App {
     pub(super) fn on_compaction_done(
@@ -16,8 +16,12 @@ impl App {
         completion_tokens: u32,
         tx: &mpsc::UnboundedSender<StreamMsg>,
     ) {
-        self.compacting = false;
-        self.compact_task = None;
+        // Extract the buffered user message (if any) before flipping
+        // back to Idle — the Compacting variant owns it.
+        let pending = match std::mem::replace(&mut self.turn, TurnState::Idle) {
+            TurnState::Compacting { pending_user, .. } => pending_user,
+            _ => None,
+        };
         self.total_prompt_tokens = self
             .total_prompt_tokens
             .saturating_add(prompt_tokens as u64);
@@ -73,18 +77,16 @@ impl App {
         // Replay the user message that was buffered while
         // compaction ran, if any. Done last so all state is
         // consistent before the new turn starts.
-        if let Some(pending) = self.pending_after_compact.take() {
-            self.send_to_llm(pending, tx);
+        if let Some(text) = pending {
+            self.send_to_llm(text, tx);
         }
     }
 
     pub(super) fn on_compaction_error(&mut self, e: String) {
-        self.compacting = false;
-        self.compact_task = None;
-        // The original history is intact (we didn't touch it
-        // before the result came back). Drop any buffered message
-        // — re-running it would just re-trigger the auto-compact.
-        self.pending_after_compact = None;
+        // Drop any buffered message — re-running it would just
+        // re-trigger the auto-compact. The original history is
+        // intact since we didn't touch it before the result came back.
+        self.turn = TurnState::Idle;
         self.push_info(format!("Compaction failed: {e}. History unchanged."));
         self.status = format!("Compact error: {e}");
     }

@@ -21,8 +21,9 @@ mod popups;
 mod sidebar;
 pub(crate) mod theme;
 mod viewer;
+mod wrap_cache;
 
-pub(crate) use sidebar::initial_expanded;
+pub(crate) use sidebar::{initial_expanded, SidebarSnapshot};
 
 /// Sidebar width (incl. its border). Skipped entirely when the terminal is
 /// too narrow to fit it alongside a usable chat column.
@@ -58,11 +59,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if !has_sidebar {
         // Sidebar is hidden — make sure stale geometry from a previous wider
         // frame can't make sidebar clicks "stick" after a resize.
-        app.sidebar_x = 0;
-        app.sidebar_y = 0;
-        app.sidebar_w = 0;
-        app.sidebar_h = 0;
-        app.sidebar_targets.clear();
+        app.render.sidebar_x = 0;
+        app.render.sidebar_y = 0;
+        app.render.sidebar_w = 0;
+        app.render.sidebar_h = 0;
+        app.render.sidebar_targets.clear();
     }
     // While a file is open the viewer takes the chat column. The chat panel
     // still keeps its scroll state so closing the viewer returns to exactly
@@ -96,6 +97,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
     if app.mode == Mode::DisconnectPicker {
         popups::render_disconnect_picker(f, area, app);
+    }
+    if app.mode == Mode::TelegramSetup {
+        popups::render_telegram_setup(f, area, app);
+    }
+    if app.mode == Mode::AgentsSetup {
+        popups::render_agents_setup(f, area, app);
     }
 }
 
@@ -131,6 +138,25 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(theme::color::FG_DIM),
         ),
     ];
+
+    // Per-specialist token breakdown — only rendered when `/ask` has
+    // actually been used, so the header stays clean for single-model
+    // sessions. Sorted by name for stable visual order across renders.
+    if !app.agent_token_tally.is_empty() {
+        let mut entries: Vec<(&String, &(u64, u64))> = app.agent_token_tally.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, (p, c)) in entries {
+            spans.push(sep.clone());
+            spans.push(Span::styled(
+                format!("{name}: ", name = name),
+                Style::default().fg(theme::color::FG_DIM),
+            ));
+            spans.push(Span::styled(
+                format!("{}/{}", format_tokens(*p), format_tokens(*c)),
+                Style::default().fg(theme::color::ASSISTANT),
+            ));
+        }
+    }
 
     // Background update check tagged us — surface the upgrade hint at
     // the right end of the header so it's visible but never in the way.

@@ -45,8 +45,8 @@ impl App {
         // can highlight the row under the pointer — including mid-drag,
         // mid-scroll, anything. Cheaper than a Moved-only branch and never
         // gets stale.
-        self.hover_x = m.column;
-        self.hover_y = m.row;
+        self.render.hover_x = m.column;
+        self.render.hover_y = m.row;
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.sel_start = Some((m.column, m.row));
@@ -66,10 +66,10 @@ impl App {
                 if self.sel_start == self.sel_end {
                     if let Some((col, row)) = self.sel_start {
                         if self.point_in_sidebar(col, row) {
-                            self.try_open_sidebar_at(row);
+                            self.try_open_sidebar_at(row, tx);
                         } else {
-                            let in_chat_col =
-                                col >= self.chat_x && col < self.chat_x.saturating_add(self.chat_w);
+                            let in_chat_col = col >= self.render.chat_x
+                                && col < self.render.chat_x.saturating_add(self.render.chat_w);
                             if in_chat_col && self.open_file.is_none() {
                                 self.try_toggle_tool_at(row);
                             }
@@ -118,11 +118,11 @@ impl App {
     }
 
     fn point_in_sidebar(&self, col: u16, row: u16) -> bool {
-        self.sidebar_w != 0
-            && col >= self.sidebar_x
-            && col < self.sidebar_x.saturating_add(self.sidebar_w)
-            && row >= self.sidebar_y
-            && row < self.sidebar_y.saturating_add(self.sidebar_h)
+        self.render.sidebar_w != 0
+            && col >= self.render.sidebar_x
+            && col < self.render.sidebar_x.saturating_add(self.render.sidebar_w)
+            && row >= self.render.sidebar_y
+            && row < self.render.sidebar_y.saturating_add(self.render.sidebar_h)
     }
 
     /// Resolve a sidebar click: directories toggle expanded state, files
@@ -130,12 +130,13 @@ impl App {
     /// we convert it to a logical line via `(screen_y - sidebar_y) +
     /// sidebar_scroll` before looking up the entry, so scrolled-out rows
     /// resolve correctly once they're brought back into view.
-    fn try_open_sidebar_at(&mut self, screen_y: u16) {
-        if screen_y < self.sidebar_y {
+    fn try_open_sidebar_at(&mut self, screen_y: u16, tx: &mpsc::UnboundedSender<StreamMsg>) {
+        if screen_y < self.render.sidebar_y {
             return;
         }
-        let logical_y = (screen_y - self.sidebar_y).saturating_add(self.sidebar_scroll);
+        let logical_y = (screen_y - self.render.sidebar_y).saturating_add(self.sidebar_scroll);
         let hit = self
+            .render
             .sidebar_targets
             .iter()
             .find(|(row, _, _)| *row == logical_y)
@@ -154,20 +155,20 @@ impl App {
                 }
             }
             Some((path, false)) => {
-                self.open_workspace_file(path);
+                self.open_workspace_file(path, tx);
             }
             None => {}
         }
     }
 
     fn try_toggle_tool_at(&mut self, screen_y: u16) {
-        let top = self.chat_y;
-        let bottom = top.saturating_add(self.chat_h);
+        let top = self.render.chat_y;
+        let bottom = top.saturating_add(self.render.chat_h);
         if screen_y < top || screen_y >= bottom {
             return;
         }
         let logical_y = self.scroll.saturating_add(screen_y - top);
-        for &(idx, ls, le) in &self.message_line_ranges {
+        for &(idx, ls, le) in &self.render.message_line_ranges {
             if logical_y >= ls && logical_y < le {
                 if let Some(msg) = self.messages.get(idx) {
                     if msg.role == "tool" && !self.expanded_tools.remove(&idx) {
@@ -189,10 +190,10 @@ impl App {
         } else {
             (end, start)
         };
-        let cx = self.chat_x;
-        let cy = self.chat_y;
-        let cw = self.chat_w;
-        let ch = self.chat_h;
+        let cx = self.render.chat_x;
+        let cy = self.render.chat_y;
+        let cw = self.render.chat_w;
+        let ch = self.render.chat_h;
         if cw == 0 || ch == 0 {
             self.sel_start = None;
             self.sel_end = None;
@@ -210,6 +211,7 @@ impl App {
         for screen_y in row_lo..=row_hi {
             let logical_idx = (self.scroll as usize) + ((screen_y - cy) as usize);
             let line = self
+                .render
                 .rendered_text_lines
                 .get(logical_idx)
                 .map(|s| s.as_str())

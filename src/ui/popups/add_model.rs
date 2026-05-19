@@ -11,7 +11,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AddModelStep, App};
+use crate::app::App;
 
 use super::super::markdown::{parse_inline_md, wrap_styled_segments};
 use super::super::theme;
@@ -21,12 +21,12 @@ pub(in crate::ui) fn render_add_model(f: &mut Frame, full: Rect, app: &mut App) 
     let area = centered_rect(70, 40, full);
     f.render_widget(Clear, area);
 
-    let (title, body, hint) = match app.add_model_step {
-        AddModelStep::Key => {
-            let (title, body) = match app.add_model_provider.as_str() {
-                p if p == crate::config::OLLAMA_CLOUD_PROVIDER => (
-                    " add Ollama Cloud key ".to_string(),
-                    "Paste your Ollama Cloud API key (generate one at \
+    // Single-step modal — pasting the API key is the whole flow.
+    let (title, body, hint) = {
+        let (title, body) = match app.add_model_provider.as_str() {
+            p if p == crate::config::OLLAMA_CLOUD_PROVIDER => (
+                " add Ollama Cloud key ".to_string(),
+                "Paste your Ollama Cloud API key (generate one at \
                      https://ollama.com/settings/keys). After saving, the \
                      free-tier models (glm-4.7, gpt-oss:120b-cloud, \
                      qwen3-coder-next) become selectable in /model and you'll \
@@ -36,11 +36,11 @@ pub(in crate::ui) fn render_add_model(f: &mut Frame, full: Rect, app: &mut App) 
                      returns a 403 until you upgrade at ollama.com/upgrade.\n\n\
                      The key is stored in ~/.config/hmanlab/config.json (mode \
                      0600) and only sent to ollama.com — never to hmanlab-api."
-                        .to_string(),
-                ),
-                p if p == crate::config::OPENROUTER_PROVIDER => (
-                    " add OpenRouter key ".to_string(),
-                    "Paste your OpenRouter API key (generate one at \
+                    .to_string(),
+            ),
+            p if p == crate::config::OPENROUTER_PROVIDER => (
+                " add OpenRouter key ".to_string(),
+                "Paste your OpenRouter API key (generate one at \
                      https://openrouter.ai/settings/keys). OpenRouter is a \
                      meta-provider that routes to OpenAI, Anthropic, Google, \
                      Meta, DeepSeek, Qwen and many others behind one \
@@ -56,11 +56,11 @@ pub(in crate::ui) fn render_add_model(f: &mut Frame, full: Rect, app: &mut App) 
                      credit balance. Some rows are free (suffix `:free`).\n\n\
                      The key is stored in ~/.config/hmanlab/config.json (mode \
                      0600) and only sent to openrouter.ai — never to hmanlab-api."
-                        .to_string(),
-                ),
-                p if p == crate::config::OPENCODE_PROVIDER => (
-                    " add OpenCode Go key ".to_string(),
-                    "Paste your OpenCode API key (generate one at \
+                    .to_string(),
+            ),
+            p if p == crate::config::OPENCODE_PROVIDER => (
+                " add OpenCode Go key ".to_string(),
+                "Paste your OpenCode API key (generate one at \
                      https://opencode.ai/zen). This provider points at the \
                      Go subscription endpoint — requests bill against your \
                      Go plan, not pay-per-credit.\n\n\
@@ -76,29 +76,28 @@ pub(in crate::ui) fn render_add_model(f: &mut Frame, full: Rect, app: &mut App) 
                      through this provider yet.\n\n\
                      The key is stored in ~/.config/hmanlab/config.json (mode \
                      0600) and only sent to opencode.ai — never to hmanlab-api."
-                        .to_string(),
-                ),
-                p if p == crate::config::ZAI_USAGE_PROVIDER => (
-                    " add z.ai (usage-based) key ".to_string(),
-                    "Paste your z.ai usage-based API key. After saving, all three \
+                    .to_string(),
+            ),
+            p if p == crate::config::ZAI_USAGE_PROVIDER => (
+                " add z.ai (usage-based) key ".to_string(),
+                "Paste your z.ai usage-based API key. After saving, all three \
                      z.ai models (glm-4.7, glm-4.6, glm-5.1) become selectable in \
                      /model and you'll be switched to glm-4.7 by default.\n\n\
                      The key is stored in ~/.config/hmanlab/config.json (mode \
                      0600) and only sent to z.ai — never to hmanlab-api."
-                        .to_string(),
-                ),
-                _ => (
-                    " add z.ai key ".to_string(),
-                    "Paste your z.ai coding-plan API key. After saving, all three \
+                    .to_string(),
+            ),
+            _ => (
+                " add z.ai key ".to_string(),
+                "Paste your z.ai coding-plan API key. After saving, all three \
                      z.ai models (glm-4.7, glm-4.6, glm-5.1) become selectable in \
                      /model and you'll be switched to glm-4.7 by default.\n\n\
                      The key is stored in ~/.config/hmanlab/config.json (mode \
                      0600) and only sent to z.ai — never to hmanlab-api."
-                        .to_string(),
-                ),
-            };
-            (title, body, "Enter to save  ·  Esc to cancel")
-        }
+                    .to_string(),
+            ),
+        };
+        (title, body, "Enter to save  ·  Esc to cancel")
     };
 
     let block = theme::popup_block(title.trim(), false).padding(Padding::horizontal(1));

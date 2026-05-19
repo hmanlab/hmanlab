@@ -13,6 +13,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::app::StreamMsg;
+
 mod definitions;
 mod diff;
 mod git;
@@ -22,7 +24,7 @@ mod shell;
 mod workspace;
 mod write;
 
-pub use definitions::{system_prompt, tool_definitions};
+pub use definitions::{system_prompt, tool_definitions, tool_definitions_with};
 pub use diff::{DiffLine, DiffLineKind};
 
 /// Request the user confirm before running something risky.
@@ -36,11 +38,24 @@ pub struct ConfirmRequest {
     pub responder: oneshot::Sender<bool>,
 }
 
-/// Per-invocation context handed to each tool.
+/// Per-invocation context handed to each tool. Carries one mpsc
+/// channel back to App — confirm requests and the phase-3 specialist
+/// dispatch both ride on the same stream as plain `StreamMsg` variants
+/// (no extra task to bridge a per-purpose channel).
 pub struct ToolContext {
     pub workspace: PathBuf,
-    /// Channel back to the UI to ask the user for confirmation.
-    pub confirm_tx: mpsc::UnboundedSender<ConfirmRequest>,
+    /// Single channel back to the UI. `confirm` wraps requests as
+    /// `StreamMsg::ConfirmRequest`; `tool_consult_specialist` wraps
+    /// dispatches as `StreamMsg::SpecialistRequest`. Inside a nested
+    /// specialist sub-loop this is the sub-loop's local channel, so
+    /// any confirm requests (which can't happen anyway — read-only
+    /// tools only) get silently dropped by the drain loop.
+    pub stream_tx: mpsc::UnboundedSender<StreamMsg>,
+    /// Pre-built specialist runners visible to this turn's tool surface
+    /// (phase 2). Empty when `consult_specialist` shouldn't reach
+    /// anyone — either agents are session-disabled, or this is a nested
+    /// specialist call (no chaining, no recursion).
+    pub specialists: Vec<crate::agent::SpecialistRunner>,
 }
 
 /// Send a confirmation request to the UI and wait for the user's y/n.
@@ -51,12 +66,12 @@ pub(super) async fn confirm(
     diff: Vec<DiffLine>,
 ) -> Result<bool> {
     let (tx, rx) = oneshot::channel::<bool>();
-    ctx.confirm_tx
-        .send(ConfirmRequest {
+    ctx.stream_tx
+        .send(StreamMsg::ConfirmRequest(ConfirmRequest {
             prompt,
             diff,
             responder: tx,
-        })
+        }))
         .map_err(|_| anyhow!("UI channel closed before confirmation"))?;
     Ok(rx.await.unwrap_or(false))
 }
@@ -151,6 +166,91 @@ pub async fn execute_tool(name: &str, args: &Value, ctx: &ToolContext) -> Result
         "save_memory" => memory_tools::tool_save_memory(args, ctx).await,
         "read_memory" => memory_tools::tool_read_memory(args, ctx).await,
         "forget_memory" => memory_tools::tool_forget_memory(args, ctx).await,
+        "consult_specialist" => tool_consult_specialist(args, ctx).await,
         other => bail!("unknown tool: {other}"),
     }
+}
+
+/// `consult_specialist` — supervisor entry point. The main agent
+/// picks a specialist by name; we look it up in `ctx.specialists`,
+/// hand the runner off to App via `StreamMsg::SpecialistRequest`, and
+/// await the consolidated reply through a `oneshot` channel. App runs
+/// the sub-agent on its own Tokio task (see
+/// `crate::agent::run_specialist_consult`) — no recursive future, no
+/// `Box::pin`, no `tokio::join!`. Cancellation chains naturally: if
+/// the parent agent task gets aborted, the oneshot receiver here
+/// drops, App's spawn task sees `reply_tx.closed()` fire and aborts
+/// the sub-agent.
+async fn tool_consult_specialist(args: &Value, ctx: &ToolContext) -> Result<String> {
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("consult_specialist requires 'name'"))?
+        .trim()
+        .to_string();
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("consult_specialist requires 'query'"))?
+        .trim()
+        .to_string();
+    if name.is_empty() || query.is_empty() {
+        bail!("consult_specialist needs both 'name' and 'query' (non-empty)");
+    }
+
+    let runner = ctx
+        .specialists
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(&name))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "no specialist named '{name}' is available. Known: {}",
+                if ctx.specialists.is_empty() {
+                    "(none — agents not enabled this session)".to_string()
+                } else {
+                    ctx.specialists
+                        .iter()
+                        .map(|s| s.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            )
+        })?;
+
+    let (reply_tx, reply_rx) = oneshot::channel::<Result<String, String>>();
+    ctx.stream_tx
+        .send(StreamMsg::SpecialistRequest {
+            runner,
+            query,
+            reply_tx,
+        })
+        .map_err(|_| anyhow!("UI channel closed before specialist could be dispatched"))?;
+
+    match reply_rx.await {
+        Ok(Ok(reply)) => Ok(reply),
+        Ok(Err(e)) => bail!("{e}"),
+        Err(_) => bail!("specialist task ended without sending a reply"),
+    }
+}
+
+/// Read-only tool surface for nested specialist calls — same subset
+/// `/ask` uses (see `app::commands::agents::ask_tool_defs`). Kept
+/// inline here so the tools module doesn't have to reach back into
+/// `app::commands` for what is really a tool-module concern.
+pub fn ask_specialist_tool_defs() -> Vec<crate::ollama::Tool> {
+    const READONLY: &[&str] = &[
+        "read_file",
+        "list_dir",
+        "find_files",
+        "git_status",
+        "git_log",
+        "git_diff",
+        "git_show",
+        "read_memory",
+    ];
+    tool_definitions()
+        .into_iter()
+        .filter(|t| READONLY.iter().any(|name| t.function.name == *name))
+        .collect()
 }

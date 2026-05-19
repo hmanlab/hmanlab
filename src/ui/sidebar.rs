@@ -11,10 +11,37 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::app::App;
 use crate::ui::theme;
+
+/// Cached output of one `walk` pass. Reused frame-to-frame when the
+/// inputs (`expanded_dirs`, `workspace`, `workspace_trusted`) haven't
+/// changed — saves a sync `read_dir` for every expanded directory on
+/// every redraw, which was the single hottest sidebar cost on large
+/// monorepos and slow disks.
+pub(crate) struct SidebarSnapshot {
+    entries: Vec<Entry>,
+    signature: u64,
+}
+
+/// Cheap order-independent fingerprint of the inputs to `walk`. The
+/// expanded set is hashed commutatively (each entry's hash XOR'd
+/// together) so HashSet iteration order doesn't matter.
+fn compute_signature(dirs: &HashSet<PathBuf>, workspace: &Path, trusted: bool) -> u64 {
+    let mut base = DefaultHasher::new();
+    workspace.hash(&mut base);
+    trusted.hash(&mut base);
+    let mut sig = base.finish();
+    for p in dirs {
+        let mut h = DefaultHasher::new();
+        p.hash(&mut h);
+        sig ^= h.finish();
+    }
+    sig
+}
 
 /// Hard cap on total entries — protects against a pathological expansion
 /// (deeply nested monorepo) from blowing up the render. A trailing `…` row
@@ -97,20 +124,35 @@ pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
 
     // Stash inner geometry so `event::handle_mouse` can hit-test clicks
     // and route wheel events.
-    app.sidebar_x = inner.x;
-    app.sidebar_y = inner.y;
-    app.sidebar_w = inner.width;
-    app.sidebar_h = inner.height;
-    app.sidebar_targets.clear();
+    app.render.sidebar_x = inner.x;
+    app.render.sidebar_y = inner.y;
+    app.render.sidebar_w = inner.width;
+    app.render.sidebar_h = inner.height;
+    app.render.sidebar_targets.clear();
 
-    let mut entries: Vec<Entry> = Vec::new();
-    walk(
-        &app.workspace,
-        0,
-        &app.expanded_dirs,
-        app.workspace_trusted,
-        &mut entries,
-    );
+    // Walk the workspace tree only when the inputs have actually changed.
+    // The signature is order-independent over `expanded_dirs`, so the
+    // HashSet's iteration order doesn't force a spurious rebuild.
+    let trusted = app.workspace_trusted();
+    let sig = compute_signature(&app.expanded_dirs, &app.workspace, trusted);
+    let need_rebuild = app
+        .sidebar_snapshot
+        .as_ref()
+        .map(|s| s.signature != sig)
+        .unwrap_or(true);
+    if need_rebuild {
+        let mut entries: Vec<Entry> = Vec::new();
+        walk(&app.workspace, 0, &app.expanded_dirs, trusted, &mut entries);
+        app.sidebar_snapshot = Some(SidebarSnapshot {
+            entries,
+            signature: sig,
+        });
+    }
+    let entries = &app
+        .sidebar_snapshot
+        .as_ref()
+        .expect("snapshot just built")
+        .entries;
 
     let mut lines: Vec<Line> = Vec::with_capacity(entries.len() + 1);
 
@@ -168,7 +210,8 @@ pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
         // `(screen_y - sidebar_y) + sidebar_scroll`.
         if !is_truncation {
             let logical = (line_offset as u16).saturating_add(1);
-            app.sidebar_targets
+            app.render
+                .sidebar_targets
                 .push((logical, e.path.clone(), e.is_dir));
         }
     }

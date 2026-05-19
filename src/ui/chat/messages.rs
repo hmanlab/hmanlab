@@ -21,8 +21,8 @@ use ratatui::{
 
 use crate::app::App;
 
-use super::super::markdown::{parse_inline_md, wrap_styled_segments};
 use super::super::theme;
+use super::super::wrap_cache::{wrap_md_paragraph, wrap_plain_paragraph};
 use super::helpers::{
     args_for_tool_msg, card_line, compute_read_groups, diff_line_counts, split_thinking,
     thinking_breath, tool_breath, tool_summary,
@@ -34,10 +34,10 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let inner = block.inner(area);
 
     // Stash inner geometry so the mouse selection code can hit-test.
-    app.chat_x = inner.x;
-    app.chat_y = inner.y;
-    app.chat_w = inner.width;
-    app.chat_h = inner.height;
+    app.render.chat_x = inner.x;
+    app.render.chat_y = inner.y;
+    app.render.chat_w = inner.width;
+    app.render.chat_h = inner.height;
 
     // 2-col gutter under each speaker label: rendered as a colored `▎` bar
     // in the role's color, but recorded in `text_lines` as two spaces so
@@ -64,7 +64,7 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     // Reset per-frame hover hit-test list — populated below as each card
     // file row is emitted, consumed after the paragraph render to paint
     // the hover overlay on whichever row is under the cursor.
-    app.card_row_targets.clear();
+    app.render.card_row_targets.clear();
     for (i, msg) in app.messages.iter().enumerate() {
         if msg.hidden {
             continue;
@@ -105,7 +105,7 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
             // Record this row as a hover target — the post-render overlay
             // below uses this to know which screen row to repaint with the
             // hover bg when the cursor lands on it.
-            app.card_row_targets.push((logical_row, i));
+            app.render.card_row_targets.push((logical_row, i));
             // Spacer goes AFTER the last group member, not between them
             // (that's what makes the card read as one block).
             if i == group.last && i != last_idx {
@@ -203,7 +203,7 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
             ]));
             // Header is the click target — hover highlight follows it.
             let header_logical_row = (lines.len() as u16).saturating_sub(1);
-            app.card_row_targets.push((header_logical_row, i));
+            app.render.card_row_targets.push((header_logical_row, i));
 
             if tool_expanded {
                 let body_prefix = "    ";
@@ -237,10 +237,9 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                             crate::tools::DiffLineKind::Context => theme::color::FG_DIM,
                             crate::tools::DiffLineKind::Summary => theme::color::WARNING,
                         };
-                        for spans in wrap_styled_segments(
-                            vec![(dl.text.clone(), Style::default().fg(fg))],
-                            body_content_w,
-                        ) {
+                        for spans in
+                            wrap_plain_paragraph(&dl.text, Style::default().fg(fg), body_content_w)
+                        {
                             let combined: String =
                                 spans.iter().map(|s| s.content.as_ref()).collect();
                             push_body_row(&mut lines, &mut text_lines, combined, fg);
@@ -267,8 +266,9 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                             )));
                             continue;
                         }
-                        for spans in wrap_styled_segments(
-                            vec![(paragraph.to_string(), Style::default().fg(body_fg))],
+                        for spans in wrap_plain_paragraph(
+                            paragraph,
+                            Style::default().fg(body_fg),
                             body_content_w,
                         ) {
                             let combined: String =
@@ -345,11 +345,12 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         lines.push(Line::from(Span::styled(header_text, header_style)));
 
         // Only the most-recent message is actively streaming. Passing
-        // `app.generating` to *every* assistant message made historical
-        // turns from non-reasoning models (which never emit `</think>`) get
-        // treated as mid-stream and re-render the breathing placeholder.
-        // Scope "is generating" to the tail message instead.
-        let is_streaming_here = app.generating && i == last_idx;
+        // "this app is generating" to *every* assistant message made
+        // historical turns from non-reasoning models (which never emit
+        // `</think>`) get treated as mid-stream and re-render the
+        // breathing placeholder. Scope "is generating" to the tail
+        // message instead.
+        let is_streaming_here = app.turn.is_generating() && i == last_idx;
 
         // Split assistant content into `<think>…</think>` reasoning + the
         // user-facing answer. Reasoning-tuned models (Qwen3 family, including
@@ -357,8 +358,26 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         // it as a foldable header (collapsed by default) so the chat stays
         // readable while still letting the user expand to inspect reasoning.
         // Other roles render verbatim.
+        // Owned body buffer used only by the consult_specialist expansion
+        // path — we prepend the query to the message content so an
+        // expanded consult shows `query: …` above the specialist's reply.
+        // Stays None for every other path so `visible_content` borrows
+        // from `msg.content` directly (no allocation in the common case).
+        let consult_body: Option<String> =
+            if is_tool && tool_expanded && msg.name.as_deref() == Some("consult_specialist") {
+                let args = args_for_tool_msg(&app.messages, i);
+                let query = args
+                    .and_then(|v| v.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(query not captured)");
+                Some(format!("query: {query}\n\n{}", msg.content))
+            } else {
+                None
+            };
         let (think_text, visible_content): (Option<&str>, &str) = if msg.role == "assistant" {
             split_thinking(&msg.content, is_streaming_here)
+        } else if let Some(buf) = consult_body.as_deref() {
+            (None, buf)
         } else {
             (None, msg.content.as_str())
         };
@@ -394,8 +413,7 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                     let body_style = Style::default()
                         .fg(theme::color::FG_DIM)
                         .add_modifier(Modifier::ITALIC);
-                    let segments = parse_inline_md(paragraph, body_style);
-                    let wrapped = wrap_styled_segments(segments, content_width);
+                    let wrapped = wrap_md_paragraph(paragraph, body_style, content_width);
                     for spans in wrapped {
                         let mut plain = String::with_capacity(content_width);
                         plain.push_str(indent);
@@ -445,8 +463,7 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                             .fg(theme::color::WARNING)
                             .add_modifier(Modifier::BOLD),
                     };
-                    for spans in wrap_styled_segments(vec![(dl.text.clone(), style)], content_width)
-                    {
+                    for spans in wrap_plain_paragraph(&dl.text, style, content_width) {
                         let mut plain = String::with_capacity(content_width);
                         plain.push_str(indent);
                         for span in &spans {
@@ -500,8 +517,7 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         lines.push(Line::from(""));
                         continue;
                     }
-                    let segments = parse_inline_md(paragraph, base_style);
-                    let wrapped = wrap_styled_segments(segments, content_width);
+                    let wrapped = wrap_md_paragraph(paragraph, base_style, content_width);
                     for spans in wrapped {
                         let mut plain = String::with_capacity(content_width);
                         plain.push_str(indent);
@@ -534,10 +550,22 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
             lines.push(Line::from(""));
         }
     }
-    app.rendered_text_lines = text_lines;
-    app.message_line_ranges = ranges;
+    app.render.rendered_text_lines = text_lines;
+    app.render.message_line_ranges = ranges;
 
-    let total = lines.len() as u16;
+    // Scroll math has to use VISUAL row count, not `lines.len()`. With
+    // `Wrap { trim: false }`, one logical Line can render as multiple
+    // rows when it's wider than the viewport. The earlier version used
+    // `lines.len() as u16` here, which under-counted long messages — a
+    // 3-paragraph reply where each paragraph wraps to ~3 visual rows
+    // would only let scroll reach the middle of the last paragraph,
+    // cutting off the bottom even with follow=true. The copy buffer
+    // (`rendered_text_lines`) intentionally stays one-per-logical-line
+    // so click hit-testing keeps working; only the scroll bound changes.
+    let mut para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    let total = para.line_count(inner.width).min(u16::MAX as usize) as u16;
     let visible = inner.height;
     let max_scroll = total.saturating_sub(visible);
 
@@ -547,10 +575,7 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         app.scroll = app.scroll.min(max_scroll);
     }
 
-    let para = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((app.scroll, 0));
+    para = para.scroll((app.scroll, 0));
     f.render_widget(para, area);
 
     // Hover overlay for card rows. Repaint the cell bg for whichever
@@ -559,25 +584,26 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     // buffer post-render so we don't have to know the hover row at
     // line-build time (which is awkward because the scroll offset is
     // computed *after* lines are assembled).
-    if app.hover_x >= inner.x
-        && app.hover_x < inner.x.saturating_add(inner.width)
-        && app.hover_y >= inner.y
-        && app.hover_y < inner.y.saturating_add(inner.height)
+    if app.render.hover_x >= inner.x
+        && app.render.hover_x < inner.x.saturating_add(inner.width)
+        && app.render.hover_y >= inner.y
+        && app.render.hover_y < inner.y.saturating_add(inner.height)
     {
         // Translate hover screen Y back to a logical line index using the
         // same scroll offset the paragraph rendered with.
-        let hovered_logical = (app.hover_y as u32)
+        let hovered_logical = (app.render.hover_y as u32)
             .saturating_sub(inner.y as u32)
             .saturating_add(app.scroll as u32);
         // O(N) over visible card rows — N is usually 2–10, never enough
         // to matter. Bail on the first match because each logical row
         // belongs to one card entry.
         let hit = app
+            .render
             .card_row_targets
             .iter()
             .any(|(row, _)| *row as u32 == hovered_logical);
         if hit {
-            let y = app.hover_y;
+            let y = app.render.hover_y;
             let x_start = inner.x;
             let x_end = inner.x.saturating_add(inner.width).saturating_sub(1);
             let bg = theme::color::BG_CARD_HOVER;

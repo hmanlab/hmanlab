@@ -94,6 +94,17 @@ pub(super) fn tool_summary(name: &str, args: Option<&serde_json::Value>) -> Stri
         "run_command" | "Bash" | "Shell" => {
             format!("$ {}", get_str("command").unwrap_or_else(|| "?".into()))
         }
+        // Phase 2 specialist delegation. The args carry a multi-line
+        // `query` that's noisy when inlined into the header — collapse
+        // to just the specialist name. The full query is rendered into
+        // the expanded body by the chat renderer so nothing is lost;
+        // it's just folded by default.
+        "consult_specialist" => {
+            format!(
+                "consult · {}",
+                get_str("name").unwrap_or_else(|| "?".into())
+            )
+        }
         other => {
             let json = args
                 .and_then(|v| serde_json::to_string(v).ok())

@@ -14,6 +14,15 @@ pub struct ChatMessage {
     /// Function name for tool-result messages (role="tool").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// OpenAI-compat tool-result correlation: matches the `id` field of
+    /// the originating `tool_call` from the prior assistant turn. Set
+    /// by `agent_loop_with` when pushing tool result messages. Optional
+    /// because the Ollama native protocol doesn't require it; some
+    /// OpenAI-compat backends do (MiniMax 400s without it, glm-5.1 is
+    /// lenient). Skipped from serialization when None so Ollama doesn't
+    /// see a stray field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     /// Locally-injected user messages (Y/N quick-reply) that go to the model
     /// but never render in the chat UI. Never sent over the wire.
     #[serde(skip)]
@@ -25,6 +34,38 @@ pub struct ChatMessage {
     /// over the wire — only relevant locally to the UI.
     #[serde(skip)]
     pub diff: Option<Vec<crate::tools::DiffLine>>,
+}
+
+impl ChatMessage {
+    /// Build a tool-result message correctly correlated to its
+    /// originating tool_call. `call_id` must match the synthesized id
+    /// the OpenAI-compat serializer attaches to the assistant turn's
+    /// `tool_calls` (positionally: `call_<index>`) — strict providers
+    /// like MiniMax 400 without it. Use this constructor in the agent
+    /// loop so the correlation never gets dropped by a future contributor
+    /// reaching for `..Default::default()`.
+    pub fn tool_result(name: String, content: String, call_id: String) -> Self {
+        Self {
+            role: "tool".into(),
+            content,
+            name: Some(name),
+            tool_call_id: Some(call_id),
+            ..Default::default()
+        }
+    }
+
+    /// Build the assistant message that records this turn's emitted
+    /// `tool_calls`. Counterpart to [`Self::tool_result`] — pairing the
+    /// two builders keeps the request/response shape spec-correct
+    /// without relying on hand-built struct literals.
+    pub fn assistant_with_tool_calls(content: String, calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content,
+            tool_calls: Some(calls),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

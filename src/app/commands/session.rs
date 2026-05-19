@@ -15,8 +15,8 @@
 //! `maybe_auto_load_more` is the scroll-triggered counterpart to `/more`:
 //! when the chat is scrolled to the top of a `/load`'d session and there's
 //! still older history available, it silently pages another `PAGE_SIZE`
-//! batch in without the user having to type `/more`. `loading_more` debounces
-//! repeated triggers during one scroll gesture; `no_more_history` short-
+//! batch in without the user having to type `/more`. `PageState::Loading`
+//! debounces repeated triggers during one scroll gesture; `Exhausted` short-
 //! circuits once the server has confirmed there's nothing earlier.
 
 use tokio::sync::mpsc;
@@ -42,10 +42,11 @@ impl App {
         self.total_prompt_tokens = 0;
         self.total_completion_tokens = 0;
         self.last_prompt_tokens = 0;
-        self.pending_after_compact = None;
+        self.agent_token_tally.clear();
+        self.drop_pending_compact_user();
         self.scroll = 0;
         self.follow = true;
-        self.no_more_history = false;
+        self.page_state = crate::app::PageState::Idle;
         self.status = "History cleared (current session continues)".into();
     }
 
@@ -59,12 +60,13 @@ impl App {
         self.total_prompt_tokens = 0;
         self.total_completion_tokens = 0;
         self.last_prompt_tokens = 0;
-        self.pending_after_compact = None;
+        self.agent_token_tally.clear();
+        self.drop_pending_compact_user();
         self.scroll = 0;
         self.follow = true;
         self.loaded_session_id = None;
         self.oldest_loaded_msg_id = None;
-        self.no_more_history = false;
+        self.page_state = crate::app::PageState::Idle;
         if let Some(tx) = &self.api_tx {
             let _ = tx.send(ApiOp::EndSession);
             self.push_info("New session started. Previous chat saved.".into());
@@ -153,12 +155,12 @@ impl App {
             self.push_info("No more messages to load.".into());
             return;
         };
-        if self.loading_more {
+        if self.page_state.is_loading() {
             // A previous /more or auto-load is already in flight — drop
             // this one rather than queueing duplicate requests.
             return;
         }
-        self.loading_more = true;
+        self.page_state = crate::app::PageState::Loading;
         self.status = "Loading older messages…".into();
         let tx = tx.clone();
         tokio::spawn(async move {
@@ -180,13 +182,10 @@ impl App {
     /// whenever the chat is scrolled to the very top. Silent — does nothing
     /// (and emits no info message) when there's no session loaded, no older
     /// history, or a load is already in flight. The actual fetch reuses
-    /// `load_more`'s spawn, so the `loading_more` flag and `MoreLoaded`
-    /// stream handler govern both paths.
+    /// `load_more`'s spawn, so the `PageState::Loading` guard and
+    /// `MoreLoaded` stream handler govern both paths.
     pub(in crate::app) fn maybe_auto_load_more(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
-        if self.loading_more {
-            return;
-        }
-        if self.no_more_history {
+        if self.page_state.is_loading() || self.page_state.is_exhausted() {
             return;
         }
         if self.scroll != 0 {

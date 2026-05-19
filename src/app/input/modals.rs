@@ -63,20 +63,10 @@ impl App {
                 self.mode = Mode::Chat;
                 self.status = "Cancelled".into();
             }
-            KeyCode::Up | KeyCode::Char('k') if self.session_picker_index > 0 => {
-                self.session_picker_index -= 1;
-            }
-            KeyCode::Down | KeyCode::Char('j')
-                if self.session_picker_index + 1 < self.session_picker_items.len() =>
-            {
-                self.session_picker_index += 1;
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.session_picker.select_prev(),
+            KeyCode::Down | KeyCode::Char('j') => self.session_picker.select_next(),
             KeyCode::Enter => {
-                if let Some(s) = self
-                    .session_picker_items
-                    .get(self.session_picker_index)
-                    .cloned()
-                {
+                if let Some(s) = self.session_picker.selected().cloned() {
                     self.mode = Mode::Chat;
                     // Reuse the existing load-by-prefix path: just pass the
                     // full id so load_session resolves it cleanly.
@@ -91,16 +81,10 @@ impl App {
     pub(in crate::app) fn handle_picker(&mut self, key: KeyEvent) -> AppAction {
         match key.code {
             KeyCode::Esc => self.mode = Mode::Chat,
-            KeyCode::Up | KeyCode::Char('k') if self.picker_index > 0 => {
-                self.picker_index -= 1;
-            }
-            KeyCode::Down | KeyCode::Char('j')
-                if self.picker_index + 1 < self.picker_entries.len() =>
-            {
-                self.picker_index += 1;
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.model_picker.select_prev(),
+            KeyCode::Down | KeyCode::Char('j') => self.model_picker.select_next(),
             KeyCode::Enter => {
-                if let Some(entry) = self.picker_entries.get(self.picker_index).cloned() {
+                if let Some(entry) = self.model_picker.selected().cloned() {
                     match entry {
                         PickerEntry::Ollama(name) => {
                             self.model = name.clone();
@@ -117,20 +101,8 @@ impl App {
                             self.mode = Mode::Chat;
                             let _ = persist_last_model(&self.model, Some(&provider));
                         }
-                        PickerEntry::AddZaiSubscription => {
-                            self.begin_add_model(crate::config::ZAI_SUBSCRIPTION_PROVIDER);
-                        }
-                        PickerEntry::AddZaiUsage => {
-                            self.begin_add_model(crate::config::ZAI_USAGE_PROVIDER);
-                        }
-                        PickerEntry::AddOllamaCloud => {
-                            self.begin_add_model(crate::config::OLLAMA_CLOUD_PROVIDER);
-                        }
-                        PickerEntry::AddOpenCode => {
-                            self.begin_add_model(crate::config::OPENCODE_PROVIDER);
-                        }
-                        PickerEntry::AddOpenRouter => {
-                            self.begin_add_model(crate::config::OPENROUTER_PROVIDER);
+                        PickerEntry::AddProvider(provider) => {
+                            self.begin_add_model(&provider);
                         }
                     }
                 } else {
@@ -189,6 +161,17 @@ impl App {
                     }
                     let _ = req.responder.send(true);
                     self.push_info(format!("✓ Allowed: {}", req.prompt));
+                    // If we'd also DM'd this prompt to Telegram, overwrite
+                    // the original message there so the buttons no longer
+                    // look actionable.
+                    if let Some(ctx) = self.pending_telegram_confirm.take() {
+                        let body = format!("✓ Allowed locally by the hmanlab user: {}", req.prompt);
+                        if let Some(message_id) = ctx.message_id {
+                            self.edit_telegram_message(ctx.chat_id, message_id, body);
+                        } else {
+                            self.send_telegram_dm(ctx.chat_id, body);
+                        }
+                    }
                 }
                 self.mode = Mode::Chat;
             }
@@ -196,6 +179,14 @@ impl App {
                 if let Some(req) = self.pending_confirm.take() {
                     let _ = req.responder.send(false);
                     self.push_info(format!("✗ Denied: {}", req.prompt));
+                    if let Some(ctx) = self.pending_telegram_confirm.take() {
+                        let body = format!("✗ Denied locally by the hmanlab user: {}", req.prompt);
+                        if let Some(message_id) = ctx.message_id {
+                            self.edit_telegram_message(ctx.chat_id, message_id, body);
+                        } else {
+                            self.send_telegram_dm(ctx.chat_id, body);
+                        }
+                    }
                 }
                 self.mode = Mode::Chat;
             }

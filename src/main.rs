@@ -20,6 +20,7 @@ mod config;
 mod memory;
 mod ollama;
 mod openai_compat;
+mod telegram;
 mod tools;
 mod trust;
 mod ui;
@@ -149,12 +150,31 @@ async fn main() -> Result<()> {
     app.seed_sidebar_top_level();
 
     // Carry BYOK state into the app so /model can show + use extra models.
-    app.zai_api_key = saved2.zai_api_key.clone();
-    app.zai_usage_api_key = saved2.zai_usage_api_key.clone();
-    app.ollama_cloud_api_key = saved2.ollama_cloud_api_key.clone();
-    app.opencode_api_key = saved2.opencode_api_key.clone();
-    app.openrouter_api_key = saved2.openrouter_api_key.clone();
+    // On-disk format keeps the per-provider fields for backwards compat;
+    // App-side everything is one HashMap keyed by provider id.
+    if let Some(k) = saved2.zai_api_key.clone() {
+        app.set_byok_key(config::ZAI_SUBSCRIPTION_PROVIDER, k);
+    }
+    if let Some(k) = saved2.zai_usage_api_key.clone() {
+        app.set_byok_key(config::ZAI_USAGE_PROVIDER, k);
+    }
+    if let Some(k) = saved2.ollama_cloud_api_key.clone() {
+        app.set_byok_key(config::OLLAMA_CLOUD_PROVIDER, k);
+    }
+    if let Some(k) = saved2.opencode_api_key.clone() {
+        app.set_byok_key(config::OPENCODE_PROVIDER, k);
+    }
+    if let Some(k) = saved2.openrouter_api_key.clone() {
+        app.set_byok_key(config::OPENROUTER_PROVIDER, k);
+    }
     app.extra_models = saved2.extra_models.clone();
+    // Mirror the persisted "DM me when I walk away" preference. The bot
+    // task itself reads the allowlist on each message, but the on_done
+    // hot path reads this flag, so we cache it on App.
+    app.telegram_notify_on_idle = saved2.telegram_notify_on_idle;
+    // Specialist agents roster. Session activation stays off by design
+    // — the user opts in per-session with `/agents on`.
+    app.agents = saved2.agents.clone();
     // Workspace trust list — paths stored as canonical strings. Recompute
     // whether the current workspace sits in that list so the confirm
     // interceptor in `app::stream` can short-circuit destructive tools.
@@ -163,20 +183,15 @@ async fn main() -> Result<()> {
         .iter()
         .map(std::path::PathBuf::from)
         .collect();
-    app.workspace_trusted = app.trusted_workspaces.iter().any(|p| p == &app.workspace);
     // Re-seed now that we know the trust state — the first call above
-    // ran with the default `workspace_trusted = false`, so trusted
-    // workspaces wouldn't have shown their dotfile dirs at root.
+    // ran with an empty trusted_workspaces list, so trusted workspaces
+    // wouldn't have shown their dotfile dirs at root. `seed` reads
+    // `workspace_trusted()` which now matches the loaded list.
     app.seed_sidebar_top_level();
     // Migrate older configs: a saved BYOK key means the matching provider's
     // models should be available, even if the user previously added only one.
     // Also rewrites legacy provider="zai" → "zai-subscription".
-    if app.zai_api_key.is_some()
-        || app.zai_usage_api_key.is_some()
-        || app.ollama_cloud_api_key.is_some()
-        || app.opencode_api_key.is_some()
-        || app.openrouter_api_key.is_some()
-    {
+    if !app.byok_keys.is_empty() {
         app.ensure_zai_models_pub();
     }
 
@@ -280,6 +295,11 @@ async fn run<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: 
     // is unreachable.
     app.refresh_openrouter_models(&tx);
 
+    // Telegram bot resumes automatically if a token was persisted in a
+    // prior session. `getMe` re-runs on this path so a revoked token
+    // surfaces a clean error instead of a long-poll loop failing silently.
+    app.boot_telegram(&tx);
+
     // Animation ticker: fires every 120 ms but is only polled while the agent
     // is generating or a tool is running (see the `if` guard on its select!
     // arm). Drives `app.anim_tick`, which the renderer uses to pulse the
@@ -291,7 +311,7 @@ async fn run<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: 
         terminal.draw(|f| ui::render(f, &mut app))?;
 
         tokio::select! {
-            _ = ticker.tick(), if app.generating || app.active_tool_msg_idx.is_some() => {
+            _ = ticker.tick(), if app.turn.is_generating() || app.active_tool_msg_idx.is_some() => {
                 app.anim_tick = app.anim_tick.wrapping_add(1);
             }
             maybe_event = events.next() => {
@@ -309,6 +329,23 @@ async fn run<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: 
             }
             Some(msg) = rx.recv() => {
                 app.handle_stream(msg, &tx);
+                // Drain any messages that piled up while we were
+                // handling the first one. Coalesces a burst of
+                // `Chunk`s into a single redraw — without this, a
+                // model that streams token-by-token forces the
+                // markdown parser to re-run on every visible message
+                // per token. Cap protects the event/ticker arms from
+                // starvation when the stream is genuinely unbounded.
+                let mut drained = 0;
+                while drained < 64 {
+                    match rx.try_recv() {
+                        Ok(more) => {
+                            app.handle_stream(more, &tx);
+                            drained += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
             }
         }
     }
