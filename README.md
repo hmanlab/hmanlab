@@ -156,6 +156,8 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `/telegram unpair` | Clear all paired Telegram users (bot keeps running) |
 | `/telegram off` | Stop the bot and clear token + allowlist |
 | `/telegram notify [on\|off]` | Toggle idle notifications (DM when a local turn finishes) |
+| `/agents [sub]` | Manage specialist agents — see the [Multi-agent specialists](#multi-agent-specialists) section |
+| `/ask <name> <query>` | Manually invoke a specialist (run `/agents on` first) |
 | `/update` | Check the npm registry and update to the latest release |
 | `/clear` | Clear visible chat (session keeps going) |
 | `/quit`, `/exit` | Quit (also `Ctrl+Q` or `Ctrl+C` when idle) |
@@ -188,6 +190,137 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `Y` / `N` | Quick-reply when AI asks a yes/no question |
 
 </details>
+
+---
+
+## Multi-agent specialists
+
+Configure up to **5 named specialists**, each with their own model and a one-line *"use this when …"* description. The main agent delegates to them automatically via the `consult_specialist` tool, or you can route by hand with `/ask <name> <query>`. Specialists run with a **read-only tool surface** (file reads, git, memory recall) — writes, shell, and memory mutation stay with the main agent so cost stays bounded and loops can't form.
+
+### Quick start
+
+```text
+/agents add                  # 5-step wizard: template → name → model → task → prompt
+/agents on                   # enable specialist consultation for this session
+"use agents to review src/agent.rs"   # main agent auto-delegates to a reviewer
+/ask reviewer "what could go wrong in src/agent.rs?"   # manual invoke
+/agents list                 # see the roster + per-agent token tally in the header
+```
+
+### Setup wizard
+
+`/agents add` walks you through:
+
+1. **Template** — pick `blank` to fill every field by hand, or one of 7 opinionated recipes that pre-fill name, task, and system prompt:
+   - `code-reviewer` — second-pass review for bugs + style
+   - `planner` — break tasks into steps, write PRDs
+   - `file-explorer` — summarise files/directories
+   - `researcher` — investigate "where is X used / how does Y work"
+   - `triage` — diagnose bugs from traces, logs, behavior
+   - `test-advisor` — list test cases (names + assertions) for a target
+   - `doc-reviewer` — check docs against actual code
+2. **Name** — short slug (3-30 chars; letters/digits/`_`/`-`). Used in `/ask <name>` and as the `consult_specialist` argument.
+3. **Model** — pick from your live Ollama models + BYOK extras. Specialists can run on a different provider than the main agent.
+4. **Task** — one-line "use this when…" description (≤ 200 chars). Shown in `/agents list` and fed into the consult tool description so the main agent knows when to delegate.
+5. **System prompt** — full persona instructions. Multi-line (`Alt+Enter` / `Ctrl+J` for newline). Templates pre-fill an opinionated default; edit freely.
+
+### Roster commands
+
+| Command | Action |
+|---|---|
+| `/agents` | Show roster + session state + subcommand list |
+| `/agents add` | Open the 5-step wizard for a new specialist |
+| `/agents edit <name>` | Re-open the wizard pre-filled for an existing specialist |
+| `/agents remove <name>` | Drop a specialist (`/agents rm` and `/agents del` also work) |
+| `/agents list` | Pretty-print the current roster |
+| `/agents on` / `/agents off` | Flip per-session activation (default: off on every launch) |
+| `/agents enable-agent <name>` / `disable-agent <name>` | Park a specialist without removing it |
+| `/ask <name> <query>` | Manually invoke a specialist (bypasses the main agent entirely) |
+
+### How delegation works
+
+When `/agents on` is active and at least one specialist is enabled, the main agent sees a `consult_specialist(name, query)` tool whose description includes each enabled specialist's task line. The model decides when to delegate based on those hints — e.g. it'll consult a `reviewer` for "review this code" prompts. Each consult shows in chat as a single tool row (collapsed by default; click to expand and see the query + specialist's reply). The header tally splits tokens per agent so consult costs stay legible.
+
+### Important details
+
+- **Per-session opt-in.** `/agents on` resets to off on every TUI restart — by design, so you don't surprise-bill yourself.
+- **Roster persists.** The 5-slot roster lives in `~/.config/hmanlab/config.json` and survives restarts.
+- **No chaining.** Specialists can't call other specialists (their tool surface excludes `consult_specialist`). One level deep, predictable cost.
+- **Cancellation chains.** `Ctrl+C` during a consult aborts both the main agent and the specialist task.
+- **`/ask` works without `/agents on`?** No — both paths gate on the session toggle so the opt-in stays meaningful.
+
+---
+
+## Telegram bot
+
+Pair your own Telegram bot to chat with hmanlab from your phone. DMs from paired users become user turns; the assistant's reply DMs back. Destructive tools get inline approval buttons.
+
+### Setup (one-time)
+
+1. **Create a bot** via [@BotFather](https://t.me/BotFather) → `/newbot` → pick a name + handle. BotFather replies with a token (looks like `123456:ABC-DEF…`).
+2. **Setup in hmanlab.** Run `/telegram setup` (opens a wizard) or paste the token directly: `/telegram setup 123456:ABC-DEF…`. hmanlab validates the token with `getMe` and starts the long-poll loop.
+3. **Pair your Telegram account.** DM your bot any text from your phone. The bot replies with a 6-character pairing code (e.g. `K7M3Q9` — `0`/`O`/`1`/`I`/`L` excluded to avoid confusion). Codes expire after 10 minutes.
+4. **Redeem the code** in the TUI: `/telegram pair K7M3Q9`. Your Telegram account is now on the allowlist; codes are one-shot.
+
+### Using it
+
+Once paired, DM your bot like you'd chat in the TUI:
+
+```text
+(you)  → write me a haiku about rust
+(bot)  ← Three rules guard your code, /
+         compiler smiles, types align, /
+         segfaults flee at dawn.
+```
+
+Slash commands work from Telegram too — same aliases as the local terminal (`/m`, `/n`, `/ls`, etc.):
+
+| Telegram command | What it does |
+|---|---|
+| `/help` | List the commands available over Telegram |
+| `/models` | List available models (read-only over Telegram) |
+| `/model <name>` | Switch the active model (BYOK keys must be configured locally) |
+| `/new` | Start a fresh session |
+| `/sessions` | List recent saved sessions |
+| `/settings` | Account, version, configured providers |
+| `/agents` | Show specialist roster + session state |
+| `/agents on` / `/agents off` | Toggle specialist session |
+| `/ask <name> <query>` | Manually invoke a specialist |
+
+Anything not in the allowlist (`/quit`, `/host`, `/workspace`, `/agents add`, `/agents remove`, …) gets a "not available via Telegram" reply. Roster editing stays local-only because the wizard is the only sane way to write multi-line system prompts.
+
+### Approving destructive tools
+
+When the main agent wants to write a file, run a shell command, or save a memory, you'll get a Telegram DM with inline buttons:
+
+```
+write_file: src/agent.rs (+12 -3 lines)
+[✅ Allow]  [🔏 Always]  [❌ Deny]
+```
+
+- **Allow** — runs once.
+- **Always** — runs once AND adds the tool head (`write_file:`, `run_command:`, etc.) to a session-only allowlist so further matching prompts auto-approve without a DM. Resets on TUI restart.
+- **Deny** — rejects; the tool returns an error the agent surfaces in chat.
+
+If your phone doesn't render the buttons (rare), text fallback works: reply `y` / `yes` / `allow` or `n` / `no` / `deny`.
+
+### Local commands
+
+| Command | Action |
+|---|---|
+| `/telegram setup [token]` | Set / replace the bot token (opens wizard if no token given) |
+| `/telegram pair [code]` | Redeem a pairing code from a Telegram DM |
+| `/telegram status` | Bot status, paired users count, last event |
+| `/telegram unpair` | Clear the allowlist (token + bot stay running) |
+| `/telegram off` | Stop the bot, clear token + allowlist |
+| `/telegram notify [on\|off]` | Toggle idle notifications — DM paired users when a long local turn finishes after the terminal goes idle |
+
+### Important details
+
+- **Allowlist gate.** Strangers DM'ing your bot get a pairing code only — they can't send chat turns until you redeem their code locally. Codes are 6 chars from an unambiguous alphabet, expire in 10 minutes, one-shot.
+- **One reply route at a time.** If you're already mid-reply to one Telegram chat, a second chat's DM gets a "another Telegram chat is mid-conversation" rejection. Prevents reply mix-up.
+- **Local cancel cuts the bridge.** `Ctrl+C` mid-stream tells the Telegram side too (with a "cancelled by the local user" note) so the DM thread doesn't sit silent.
+- **Token storage.** The bot token lives in `~/.config/hmanlab/config.json` (mode `0600`) and is only sent to `api.telegram.org` — never to the hmanlab-api backend.
 
 ---
 
