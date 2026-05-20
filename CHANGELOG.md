@@ -24,10 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README-style section moves no longer panic-rewrite the whole file.** The old failure was structural: `edit_file` / `multi_edit` / `apply_patch` all required the model to reproduce file content byte-perfectly as a tool-call argument, and long reproductions hit token-budget truncation or whitespace-drift errors. `move_lines` retires that entire failure class by taking integer coordinates — the model never reproduces content, so reproduction errors are impossible. Section-swap requests that previously cycled through three failed `apply_patch` calls before giving up now land in one `move_lines` call.
 - **Cancelling an agent turn while a shell was running no longer leaves the footer indicator stuck.** The `cancel()` path now finalizes the active `ShellRuntime` so the `● 1 shell running` indicator disappears when the underlying child process is killed.
 
-### Internal
-- **`read_text_file` shared helper** consolidated the resolve+read+UTF-8-decode dance (6 duplicate sites across `edit_file`, `multi_edit`, `move_lines`, `delete_lines`, `insert_at`, `apply_patch`) into one entry point in `src/tools/workspace.rs`. Single source of truth for the "not valid UTF-8" error message.
-- **`tools/definitions.rs` split by category** into sibling files under `src/tools/definitions/` (read, git, edit, shell, memory, specialist, prompt). The orchestrator file dropped from 701 lines to ~160. Public API (`tool_definitions`, `tool_definitions_with`, `system_prompt`) is unchanged; existing call sites work as-is. New regression test (`full_tool_surface_includes_new_primitives`) asserts every tool name still registers after the split.
-
 [0.2.1]: https://github.com/hmanlab/hmanlab/compare/0.2.0...0.2.1
 
 ## [0.2.0] - 2026-05-19
