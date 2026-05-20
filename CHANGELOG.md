@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-20
+
+### What's new
+- **Free hosted DeepSeek v4 Flash.** New `[hmanlab-free]` provider in the model picker — no extra API key, just your existing hmanlab account. 200 requests/day per user. Check remaining quota in `/settings`.
+- **Live shell monitor.** Click the `● 1 shell running` indicator in the status bar to watch stdout/stderr stream in real time. `Esc` hides it, `Ctrl+C` kills the shell. Shell timeout raised from 30 s to 10 min.
+- **Typing-cursor on streaming replies.** A `▌` blinks at the tail of the assistant's in-flight message while it streams.
+- **`apply_patch` tool.** Codex-style patch envelope for multi-region edits — replaces the old "panic-rewrite the whole file" failure mode on big rearrangements.
+- **Coordinate edits: `move_lines`, `delete_lines`, `insert_at`.** Pass line numbers instead of file content. `move_lines(path, from_start, from_end, to_before)` is the new go-to for section reorders and block moves.
+
+### Changed
+- **`read_file` now returns numbered lines** (`<n>\t<content>`) so the model can refer to lines by number when calling `edit_file` or `move_lines`.
+- **`edit_file` / `multi_edit` accept `replace_all: true`** for bulk renames. Strict single-match stays the default.
+- **Fuzzier matching for `edit_file` / `multi_edit`.** Catches near-miss snippets (trailing-whitespace drift, block-anchor matches) without crossing the "ambiguous" safety line.
+- **All popups split the chat column 50/50** (picker, confirm, shell monitor, etc.) so the conversation stays visible while you approve or pick.
+- **Memory tool rows are one line.** `save_memory` / `read_memory` / `forget_memory` now read `memory · save <slug>` instead of dumping the full JSON.
+
+### Fixed
+- **Section moves no longer panic-rewrite whole files.** `move_lines` lets the model express a reorder without reproducing content, retiring the truncation/drift failure class.
+- **Cancelling a turn mid-shell clears the footer indicator** — was leaving `● 1 shell running` stuck on.
+
+[0.2.1]: https://github.com/hmanlab/hmanlab/compare/0.2.0...0.2.1
+
 ## [0.2.0] - 2026-05-19
 
 ### What's new

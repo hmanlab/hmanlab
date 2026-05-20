@@ -41,6 +41,30 @@ impl App {
         if self.mode != Mode::Chat {
             return;
         }
+        // Status-bar shell indicator. Bounded rect is populated by
+        // `render_status` only while a shell is in flight, so a click
+        // here implies the indicator is currently visible. Open the
+        // monitor and short-circuit before the chat-area hit-tests so
+        // the click doesn't also try to toggle a tool tile.
+        if let MouseEventKind::Down(MouseButton::Left) = m.kind {
+            let in_indicator = self.render.shell_indicator_w > 0
+                && m.row == self.render.shell_indicator_y
+                && m.column >= self.render.shell_indicator_x
+                && m.column
+                    < self
+                        .render
+                        .shell_indicator_x
+                        .saturating_add(self.render.shell_indicator_w);
+            if in_indicator {
+                self.mode = Mode::ShellMonitor;
+                // Cancel any in-progress selection state so this click
+                // doesn't leave the chat-area drag tracker armed.
+                self.sel_start = None;
+                self.sel_end = None;
+                self.selecting = false;
+                return;
+            }
+        }
         // Track cursor position on every mouse event so the hover overlay
         // can highlight the row under the pointer — including mid-drag,
         // mid-scroll, anything. Cheaper than a Moved-only branch and never

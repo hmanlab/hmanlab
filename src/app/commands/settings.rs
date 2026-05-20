@@ -79,8 +79,15 @@ impl App {
         let local_owned = local;
         let tx = tx.clone();
         tokio::spawn(async move {
-            let me = api.fetch_me().await;
-            let latest = crate::update_check::fetch_latest_npm().await.ok();
+            // Fan out the three lookups in parallel — they're independent
+            // and the slowest one (npm latest) gates user-visible
+            // freshness, so serialising them would just stack network
+            // round-trips for no benefit.
+            let (me, latest, usage) = tokio::join!(
+                api.fetch_me(),
+                async { crate::update_check::fetch_latest_npm().await.ok() },
+                async { api.fetch_hosted_usage().await.ok() },
+            );
             let account = match me {
                 Ok(me) => {
                     let name = me.name.as_deref().unwrap_or("(no display name set)");
@@ -90,11 +97,25 @@ impl App {
                     } else {
                         "opted out"
                     };
+                    // Hosted-chat usage tucks under the account block so
+                    // the "your situation today" info clusters together.
+                    // Quietly omitted when the endpoint is unreachable
+                    // (e.g. older api server without the route) — the
+                    // user shouldn't see "(could not load)" for a side
+                    // signal that just isn't critical.
+                    let usage_line = match usage {
+                        Some(u) => format!(
+                            "\n\x20 api call         : {used}/{quota} request / day",
+                            used = u.used,
+                            quota = u.quota,
+                        ),
+                        None => String::new(),
+                    };
                     format!(
                         "Account\n\
                          \x20 name             : {name}{admin}\n\
                          \x20 email            : {email}\n\
-                         \x20 training data    : {opt}",
+                         \x20 training data    : {opt}{usage_line}",
                         email = me.email,
                     )
                 }

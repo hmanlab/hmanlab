@@ -6,10 +6,10 @@
 use tokio::sync::mpsc;
 
 use crate::config::{
-    ExtraModel, OLLAMA_CLOUD_BASE, OLLAMA_CLOUD_MODELS, OLLAMA_CLOUD_PROVIDER, OPENCODE_BASE,
-    OPENCODE_MODELS, OPENCODE_PROVIDER, OPENROUTER_BASE, OPENROUTER_MODELS, OPENROUTER_PROVIDER,
-    OPENROUTER_VENDORS, ZAI_MODELS, ZAI_SUBSCRIPTION_BASE, ZAI_SUBSCRIPTION_PROVIDER,
-    ZAI_USAGE_BASE, ZAI_USAGE_PROVIDER,
+    ExtraModel, HMANLAB_HOSTED_MODELS, HMANLAB_HOSTED_PROVIDER, OLLAMA_CLOUD_BASE,
+    OLLAMA_CLOUD_MODELS, OLLAMA_CLOUD_PROVIDER, OPENCODE_BASE, OPENCODE_MODELS, OPENCODE_PROVIDER,
+    OPENROUTER_BASE, OPENROUTER_MODELS, OPENROUTER_PROVIDER, OPENROUTER_VENDORS, ZAI_MODELS,
+    ZAI_SUBSCRIPTION_BASE, ZAI_SUBSCRIPTION_PROVIDER, ZAI_USAGE_BASE, ZAI_USAGE_PROVIDER,
 };
 use crate::ollama::Client;
 use crate::openai_compat;
@@ -34,6 +34,14 @@ impl App {
             Some(OLLAMA_CLOUD_PROVIDER) => OLLAMA_CLOUD_BASE,
             Some(OPENCODE_PROVIDER) => OPENCODE_BASE,
             Some(OPENROUTER_PROVIDER) => OPENROUTER_BASE,
+            // Hosted-chat: route shows the hmanlab-api host since that's
+            // where the request actually goes. The user's traffic flows
+            // through the proxy, not directly to OpenCode.
+            Some(HMANLAB_HOSTED_PROVIDER) => self
+                .api
+                .as_ref()
+                .map(|c| c.base())
+                .unwrap_or(&self.client.base),
             _ => &self.client.base,
         }
     }
@@ -56,6 +64,18 @@ impl App {
         let Some(provider) = provider else {
             return Some(LlmBackend::Ollama(self.client.clone()));
         };
+        // Hosted-chat path doesn't use byok_keys — the credential is the
+        // user's already-loaded `bai_` token on the api client. Bail out
+        // early if the api client isn't configured (e.g. user dismissed
+        // the first-run wizard) since there's nowhere to send the request.
+        if provider == HMANLAB_HOSTED_PROVIDER {
+            let api = self.api.as_ref()?;
+            let base = format!("{}/v1", api.base().trim_end_matches('/'));
+            return Some(LlmBackend::OpenAi(openai_compat::Client::new(
+                base,
+                api.api_key().to_string(),
+            )));
+        }
         let key = self.byok_key(provider)?.to_string();
         match provider {
             ZAI_SUBSCRIPTION_PROVIDER => Some(LlmBackend::OpenAi(openai_compat::Client::new(
@@ -140,7 +160,28 @@ impl App {
         if self.has_byok_key(OPENROUTER_PROVIDER) {
             self.ensure_openrouter_models();
         }
+        // Hosted-chat is unconditional — availability is gated by the api
+        // client (built only when `api_key` is present), and the picker
+        // just won't pick it if the backend builder returns None.
+        self.ensure_hosted_models();
         self.persist_config();
+    }
+
+    /// Replace any persisted `hmanlab` (hosted) entries with the current
+    /// HMANLAB_HOSTED_MODELS list. Same canonical-replacement pattern as
+    /// `ensure_ollama_cloud_models` — the model whitelist is decided by
+    /// the API server, so stale picker rows from an older client release
+    /// would just 400 on click. Seeding here ensures the picker shows
+    /// only what the server actually accepts today.
+    pub(super) fn ensure_hosted_models(&mut self) {
+        self.extra_models
+            .retain(|m| m.provider != HMANLAB_HOSTED_PROVIDER);
+        for name in HMANLAB_HOSTED_MODELS {
+            self.extra_models.push(ExtraModel {
+                provider: HMANLAB_HOSTED_PROVIDER.to_string(),
+                name: (*name).to_string(),
+            });
+        }
     }
 
     /// Make sure all hardcoded z.ai models exist in `extra_models` for the
@@ -287,6 +328,14 @@ impl App {
         for em in self.extra_models.iter_mut() {
             if em.provider == "zai" {
                 em.provider = ZAI_SUBSCRIPTION_PROVIDER.to_string();
+            }
+            // Hosted-chat provider was briefly called "hmanlab" before
+            // the user-facing rename to "hmanlab-free" — translate any
+            // dev configs that persisted the old id so they don't leave
+            // an orphan picker row pointing at a provider that no
+            // longer exists.
+            if em.provider == "hmanlab" {
+                em.provider = HMANLAB_HOSTED_PROVIDER.to_string();
             }
         }
     }

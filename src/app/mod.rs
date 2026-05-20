@@ -32,7 +32,7 @@ pub use backend::LlmBackend;
 pub use inline::{InlinePopup, SLASH_COMMANDS};
 pub use state::{
     AgentsSetupStep, AppAction, DisconnectEntry, Mode, PageState, Picker, PickerEntry, RenderState,
-    TelegramSetupStep, TurnState,
+    ShellRuntime, TelegramSetupStep, TurnState,
 };
 pub use stream_msg::StreamMsg;
 pub use viewer::OpenFile;
@@ -193,6 +193,13 @@ pub struct App {
     /// `Some` between the `ToolStart` and matching `ToolResult` stream events.
     /// Used by the renderer to apply the breathing style to the running row.
     pub active_tool_msg_idx: Option<usize>,
+    /// In-flight (or just-finished) shell command + its streamed output.
+    /// `Some` from `ShellStart` until either the user dismisses the
+    /// monitor after `ShellDone`, or a fresh `ShellStart` evicts it.
+    /// The footer indicator only renders while `running == true`; the
+    /// `Mode::ShellMonitor` overlay is openable as long as this is
+    /// `Some`. See [`ShellRuntime`] for the buffer-cap policy.
+    pub active_shell: Option<ShellRuntime>,
     /// File the user opened from the sidebar. While `Some`, the file viewer
     /// occupies the chat column and intercepts keys (Esc closes; PgUp/Down
     /// scroll). Cleared when the user closes or quits.
@@ -456,6 +463,7 @@ impl App {
             last_prompt_tokens: 0,
             anim_tick: 0,
             active_tool_msg_idx: None,
+            active_shell: None,
             open_file: None,
             expanded_dirs: HashSet::new(),
             sidebar_scroll: 0,

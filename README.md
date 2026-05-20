@@ -25,6 +25,21 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 
 ---
 
+## Install
+
+| Method | Command | Binary location |
+|---|---|---|
+| **Curl** | `curl -fsSL https://github.com/hmanlab/hmanlab/releases/latest/download/install.sh \| sh` | `~/.local/bin/hmanlab` |
+| **npm (global)** | `npm i -g hmanlab` | `$(npm root -g)/../bin/hmanlab` |
+| **npm (one-off)** | `npx hmanlab` | (no install) |
+| **From source** | `cargo install --git https://github.com/hmanlab/hmanlab` | `~/.cargo/bin/hmanlab` |
+
+Prebuilt binaries cover `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, and `win32-x64`. Windows users: use the npm path — the curl installer is POSIX-only.
+
+> **Pick one install method per machine and stick with it.** Each channel drops the binary in its own directory; if you install via curl and later run `npm i -g hmanlab`, both binaries exist and your `PATH` decides which one runs. Mixing channels is the most common reason "updates don't take effect." See [Updating](#updating) below.
+
+---
+
 ## Features
 
 ### Chat
@@ -54,21 +69,6 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 - **First-run wizard** — guided setup for API key and provider selection on first launch; skip-everything-and-configure-later is fine.
 - **Telegram connect** — pair your own Telegram bot to chat with hmanlab from your phone. Create a bot via @BotFather (paste the token with `/telegram setup`), then DM the bot to receive a 6-char pairing code — redeem it in the terminal with `/telegram pair <code>`. Only allowlisted contacts can interact; the code expires after 10 minutes. DMs from paired users are forwarded as user turns; the assistant's reply is sent back as a DM. Confirm destructive tool actions with inline ✅ Allow / 🔏 Always / ❌ Deny buttons (or a `y`/`n` text fallback). Slash commands (`/help`, `/models`, `/new`, `/sessions`, `/settings`) work from Telegram too. Idle notifications can DM paired users when a long local turn finishes.
 - **Token tracking** — running prompt + completion token count shown in the header.
-
----
-
-## Install
-
-| Method | Command | Binary location |
-|---|---|---|
-| **Curl** | `curl -fsSL https://github.com/hmanlab/hmanlab/releases/latest/download/install.sh \| sh` | `~/.local/bin/hmanlab` |
-| **npm (global)** | `npm i -g hmanlab` | `$(npm root -g)/../bin/hmanlab` |
-| **npm (one-off)** | `npx hmanlab` | (no install) |
-| **From source** | `cargo install --git https://github.com/hmanlab/hmanlab` | `~/.cargo/bin/hmanlab` |
-
-Prebuilt binaries cover `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, and `win32-x64`. Windows users: use the npm path — the curl installer is POSIX-only.
-
-> **Pick one install method per machine and stick with it.** Each channel drops the binary in its own directory; if you install via curl and later run `npm i -g hmanlab`, both binaries exist and your `PATH` decides which one runs. Mixing channels is the most common reason "updates don't take effect." See [Updating](#updating) below.
 
 ---
 

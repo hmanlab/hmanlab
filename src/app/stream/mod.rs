@@ -34,6 +34,9 @@ impl App {
             }
             StreamMsg::ToolStart { name, args } => self.on_tool_start(name, args),
             StreamMsg::ToolResult { output } => self.on_tool_result(output),
+            StreamMsg::ShellStart { command, kill_tx } => self.on_shell_start(command, kill_tx),
+            StreamMsg::ShellOutput { line, is_stderr } => self.on_shell_output(line, is_stderr),
+            StreamMsg::ShellDone { exit_code } => self.on_shell_done(exit_code),
             StreamMsg::NewAssistantTurn => self.on_new_assistant_turn(),
             StreamMsg::ConfirmRequest(req) => self.on_confirm_request(req),
             StreamMsg::Done {

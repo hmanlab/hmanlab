@@ -66,6 +66,29 @@ pub enum StreamMsg {
         name: String,
         args: serde_json::Value,
     },
+    /// `run_command` has spawned its child process. Carries the kill
+    /// channel so the user can interrupt from `Mode::ShellMonitor`
+    /// (Ctrl+C) without aborting the whole agent turn. The App side
+    /// stashes this into `active_shell` and renders the footer
+    /// indicator. Tools serialise, so this evicts any prior runtime.
+    ShellStart {
+        command: String,
+        kill_tx: oneshot::Sender<()>,
+    },
+    /// One line of stdout (`is_stderr=false`) or stderr (`is_stderr=true`)
+    /// from the running shell. Appended to `active_shell.output` and
+    /// dropped if no runtime is active (defensive — shouldn't fire).
+    ShellOutput {
+        line: String,
+        is_stderr: bool,
+    },
+    /// Child process has reaped. `exit_code` is `Some(n)` for a normal
+    /// exit, `None` if it died from a signal. Flips `active_shell.running`
+    /// to `false`; the footer indicator disappears but the buffer
+    /// stays around so the monitor still shows the final output if open.
+    ShellDone {
+        exit_code: Option<i32>,
+    },
     /// Tool finished — its output replaces the placeholder content on the
     /// trailing `tool` message.
     ToolResult {

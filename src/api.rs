@@ -80,6 +80,19 @@ struct MeEnvelope {
     user: Me,
 }
 
+/// Snapshot of the authenticated user's hosted-chat usage for today.
+/// Mirrors the JSON shape of `GET /v1/chat/usage` in the api. The
+/// endpoint also returns a `tokens` field — omitted from this struct
+/// because nothing surfaces it yet; serde happily ignores unknown
+/// fields, so adding it back later is a one-line change.
+#[derive(Clone, Debug, Deserialize)]
+pub struct HostedUsage {
+    /// Requests the user has made against the hosted proxy today.
+    pub used: u32,
+    /// Daily request cap. Reset at UTC midnight by the server.
+    pub quota: u32,
+}
+
 /// Thin async wrapper around the hmanlab-api HTTP API.
 #[derive(Clone)]
 pub struct Client {
@@ -100,6 +113,22 @@ impl Client {
             base,
             api_key,
         }
+    }
+
+    /// Base URL of the hmanlab-api the client is talking to. Exposed so
+    /// the hosted-chat provider in `app::backend` can build an OpenAI-compat
+    /// client pointing at `<base>/v1` for the `/chat/completions` proxy
+    /// without re-plumbing the URL through App fields.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    /// User's `bai_` API key. Same auth the hosted-chat proxy expects on
+    /// `Authorization: Bearer …`. Held privately on the client and only
+    /// reachable through this accessor — keeps the key out of `Debug`
+    /// output and ensures it can't be re-serialised by accident.
+    pub fn api_key(&self) -> &str {
+        &self.api_key
     }
 
     /// Verify the key works. Used at startup so we can show a useful status.
@@ -133,6 +162,26 @@ impl Client {
             .json()
             .await?;
         Ok(env.user)
+    }
+
+    /// Read today's hosted-chat usage for the authenticated user
+    /// (`GET /v1/chat/usage`). Powers the `today: X/200` line in
+    /// `/settings` so users can see how close they are to the daily
+    /// quota before they hit 429. Returns the parsed snapshot or an
+    /// HTTP error — callers that want the no-info fallback should
+    /// `.ok()` the result and degrade gracefully.
+    pub async fn fetch_hosted_usage(&self) -> Result<HostedUsage> {
+        let url = format!("{}/v1/chat/usage", self.base);
+        let usage: HostedUsage = self
+            .http
+            .get(&url)
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(usage)
     }
 
     pub async fn create_session(&self, model: &str) -> Result<Session> {

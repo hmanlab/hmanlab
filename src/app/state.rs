@@ -48,6 +48,14 @@ pub struct RenderState {
     /// Inner content width (cols) of the input box from the last render.
     /// Soft-wrap on typed chars uses this to know when to break.
     pub input_inner_w: u16,
+    /// Hit-test rect for the "● 1 shell running" status-bar indicator.
+    /// Populated each frame by `render_status` only when a shell is in
+    /// flight; the mouse handler reads it to translate clicks into
+    /// `Mode::ShellMonitor`. Zeroed when no shell is running so a stale
+    /// rect from a previous frame can't catch a stray click.
+    pub shell_indicator_x: u16,
+    pub shell_indicator_y: u16,
+    pub shell_indicator_w: u16,
 }
 
 /// Returned by event handlers to tell the main loop whether to keep
@@ -84,6 +92,67 @@ pub enum Mode {
     /// user through name → model → task description → system prompt.
     /// Step tracked via [`AgentsSetupStep`].
     AgentsSetup,
+    /// Live-output viewer for the in-flight (or just-finished) shell
+    /// command. Reached by clicking the "● 1 shell running" indicator
+    /// in the status bar. Esc returns to chat (shell keeps running);
+    /// Ctrl+C kills the child but stays in the monitor so the user can
+    /// read the final output before dismissing.
+    ShellMonitor,
+}
+
+/// Live state for the one shell command the agent has in flight (or
+/// just finished). Owned by `App.active_shell`. Replaced whenever a
+/// new shell starts — tools run serially, so we only ever hold one.
+///
+/// `kill_tx` is consumed on the first Ctrl+C; further Ctrl+C presses
+/// in the monitor are no-ops. The buffer is line-bounded
+/// (`MAX_BUFFERED_LINES`) so a chatty `cargo test --nocapture` can't
+/// balloon process memory — older lines are dropped from the live
+/// view but the final tool result (built from a separate local
+/// collector in `tool_run_command`) still carries the byte-truncated
+/// archive for the chat tile.
+pub struct ShellRuntime {
+    pub command: String,
+    pub started_at: std::time::Instant,
+    /// `(line, is_stderr)` for each chunk the readers emitted. Capped
+    /// at [`ShellRuntime::MAX_BUFFERED_LINES`] (ring-trims oldest).
+    pub output: Vec<(String, bool)>,
+    /// `true` while the child is running. Flipped to `false` on
+    /// `ShellDone`. The footer indicator only renders while `true`,
+    /// the monitor overlay can still be opened either way.
+    pub running: bool,
+    /// Exit status once the child has reaped. `None` while running,
+    /// `Some(Some(code))` for a normal exit, `Some(None)` if the
+    /// process died from a signal without a numeric code.
+    pub exit_code: Option<Option<i32>>,
+    /// One-shot Sender consumed by the first kill (Ctrl+C in monitor
+    /// or workspace-trust block). The receiver lives inside the shell
+    /// tool task's `tokio::select!`; firing this races against
+    /// `child.wait()` and triggers a `child.kill()`.
+    pub kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Scroll offset into `output` (in display lines), driven by the
+    /// monitor overlay's PgUp/PgDn. Reset to 0 (= follow tail) when a
+    /// fresh shell starts.
+    pub scroll: u16,
+    /// `true` while the user wants the viewport pinned to the bottom
+    /// of the buffer. Cleared by manual scrolling, re-armed by PgDn
+    /// past the last row.
+    pub follow_tail: bool,
+}
+
+impl ShellRuntime {
+    pub const MAX_BUFFERED_LINES: usize = 5000;
+
+    pub fn push_line(&mut self, line: String, is_stderr: bool) {
+        if self.output.len() >= Self::MAX_BUFFERED_LINES {
+            // Drop the oldest 10% rather than one-at-a-time. Single
+            // pops are O(n) on Vec, which would be a real problem
+            // under high-throughput output (cargo test, npm install).
+            let drop = Self::MAX_BUFFERED_LINES / 10;
+            self.output.drain(..drop);
+        }
+        self.output.push((line, is_stderr));
+    }
 }
 
 /// Which step of the `/telegram` wizard is showing. Token first, then

@@ -65,6 +65,33 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.render.sidebar_h = 0;
         app.render.sidebar_targets.clear();
     }
+    // Modal popups split the chat column 50/50 — chat shrinks to the
+    // top half, popup occupies the bottom half. Picked over the
+    // older floating-centered overlay so the user can still see the
+    // conversation while picking a model, confirming a tool, watching
+    // the shell, etc. Inline autocomplete is NOT modal (anchored above
+    // the input) so it doesn't take the bottom half.
+    let popup_active = matches!(
+        app.mode,
+        Mode::ModelPicker
+            | Mode::Confirm
+            | Mode::AddModel
+            | Mode::SessionPicker
+            | Mode::DisconnectPicker
+            | Mode::TelegramSetup
+            | Mode::AgentsSetup
+            | Mode::ShellMonitor
+    );
+    let (chat_area, popup_area) = if popup_active {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chat_area);
+        (split[0], Some(split[1]))
+    } else {
+        (chat_area, None)
+    };
+
     // While a file is open the viewer takes the chat column. The chat panel
     // still keeps its scroll state so closing the viewer returns to exactly
     // the same conversation view.
@@ -83,31 +110,39 @@ pub fn render(f: &mut Frame, app: &mut App) {
         popups::render_inline_popup(f, chunks[2], app);
     }
 
-    if app.mode == Mode::ModelPicker {
-        popups::render_picker(f, area, app);
-    }
-    if app.mode == Mode::Confirm {
-        popups::render_confirm(f, area, app);
-    }
-    if app.mode == Mode::AddModel {
-        popups::render_add_model(f, area, app);
-    }
-    if app.mode == Mode::SessionPicker {
-        popups::render_session_picker(f, area, app);
-    }
-    if app.mode == Mode::DisconnectPicker {
-        popups::render_disconnect_picker(f, area, app);
-    }
-    if app.mode == Mode::TelegramSetup {
-        popups::render_telegram_setup(f, area, app);
-    }
-    if app.mode == Mode::AgentsSetup {
-        popups::render_agents_setup(f, area, app);
+    // Modal popups render into the bottom half of the (split) chat
+    // column. They no longer compute their own centered rect — the
+    // outer `popup_area` IS their rect; they fill it edge-to-edge.
+    if let Some(p) = popup_area {
+        match app.mode {
+            Mode::ModelPicker => popups::render_picker(f, p, app),
+            Mode::Confirm => popups::render_confirm(f, p, app),
+            Mode::AddModel => popups::render_add_model(f, p, app),
+            Mode::SessionPicker => popups::render_session_picker(f, p, app),
+            Mode::DisconnectPicker => popups::render_disconnect_picker(f, p, app),
+            Mode::TelegramSetup => popups::render_telegram_setup(f, p, app),
+            Mode::AgentsSetup => popups::render_agents_setup(f, p, app),
+            Mode::ShellMonitor => popups::render_shell_monitor(f, p, app),
+            Mode::Chat => {}
+        }
     }
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let host_short = mask_host(app.current_host());
+    // For the hmanlab-free hosted provider, swap the real backend host
+    // (the hmanlab-api domain) with a cosmetic "api.hmanlab" label.
+    // Cosmetic only — `current_host()` still returns the actual URL
+    // for any code path that needs to connect somewhere, and switching
+    // back to any other provider shows that provider's real host as
+    // usual. Centralised here because this is the only place the host
+    // is user-facing.
+    let host_short = if app.selected_extra.as_ref().map(|e| e.provider.as_str())
+        == Some(crate::config::HMANLAB_HOSTED_PROVIDER)
+    {
+        "api.hmanlab".to_string()
+    } else {
+        mask_host(app.current_host())
+    };
     let total_tokens = app.total_prompt_tokens + app.total_completion_tokens;
     let tokens_label = format_tokens(total_tokens);
 
@@ -173,18 +208,69 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_status(f: &mut Frame, area: Rect, app: &App) {
+fn render_status(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("▎ ", Style::default().fg(theme::color::ACCENT_ALT)),
-            Span::styled(app.status.as_str(), Style::default().fg(theme::color::FG)),
-        ])),
-        chunks[0],
-    );
+
+    // Left side: the regular status text, with the shell-monitor
+    // indicator appended when a `run_command` is in flight. The
+    // indicator is mouse-clickable — record its column range into
+    // `app.render` so the mouse handler can route the click.
+    let mut left_spans = vec![
+        Span::styled("▎ ", Style::default().fg(theme::color::ACCENT_ALT)),
+        Span::styled(app.status.as_str(), Style::default().fg(theme::color::FG)),
+    ];
+    // Default to "no indicator this frame" so a stale rect from a prior
+    // frame can't keep catching clicks after the shell exits.
+    app.render.shell_indicator_x = 0;
+    app.render.shell_indicator_y = 0;
+    app.render.shell_indicator_w = 0;
+    if let Some(rt) = app.active_shell.as_ref() {
+        if rt.running {
+            let dot = "●";
+            // Pulse the dot via the same anim_tick the chat renderer
+            // uses for in-flight tools — visually links "tool running"
+            // (chat-side breath) and "shell running" (footer-side
+            // breath) as the same kind of "something is happening".
+            // Sine-interp between a dim and a saturated peach (the
+            // same palette as `tool_breath` in chat/helpers.rs).
+            let dot_color = {
+                let period = 30u64;
+                let phase = (app.anim_tick % period) as f32 / period as f32 * std::f32::consts::TAU;
+                let t = (phase.sin() * 0.5) + 0.5;
+                let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+                Color::Rgb(lerp(115, 250), lerp(80, 179), lerp(60, 135))
+            };
+            let label = "  1 shell running ";
+            left_spans.push(Span::styled("   ", Style::default()));
+            left_spans.push(Span::styled(
+                dot.to_string(),
+                Style::default().fg(dot_color),
+            ));
+            left_spans.push(Span::styled(
+                label.to_string(),
+                Style::default()
+                    .fg(theme::color::FG)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            // Position the indicator hit-test. Span widths in cells:
+            //   "▎ " = 2, status text = app.status width,
+            //   "   " (gap) = 3, "●" = 1, label width follows.
+            // The whole `● 1 shell running ` block is clickable —
+            // record its left edge + total width so the mouse handler
+            // can detect taps anywhere in that range.
+            let prefix_w = 2 + app.status.chars().count() as u16 + 3;
+            let indicator_w = 1 + label.chars().count() as u16;
+            // chunks[0] is the left half of the status bar. The
+            // indicator sits inside it at column offset `prefix_w`.
+            app.render.shell_indicator_x = chunks[0].x.saturating_add(prefix_w);
+            app.render.shell_indicator_y = chunks[0].y;
+            app.render.shell_indicator_w = indicator_w;
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(left_spans)), chunks[0]);
     let help = Line::from(vec![
         Span::styled("/help", Style::default().fg(theme::color::FG)),
         Span::styled("  ·  ", Style::default().fg(theme::color::FG_DIMMER)),

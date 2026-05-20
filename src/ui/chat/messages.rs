@@ -532,6 +532,23 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         lines.push(Line::from(line_spans));
                     }
                 }
+                // Blinking caret at the tail of the in-flight assistant
+                // reply. Toggles every 4 ticks (~480 ms at the 120 ms
+                // ticker) — reads as a real terminal cursor. Appended
+                // only to `lines` so copy-on-drag won't pick up the glyph
+                // from `text_lines`. Off-state is a space so the visual
+                // width doesn't shift between blinks.
+                if is_streaming_here && msg.role == "assistant" {
+                    let caret = if (app.anim_tick / 4) % 2 == 0 {
+                        "▌"
+                    } else {
+                        " "
+                    };
+                    if let Some(line) = lines.last_mut() {
+                        line.spans
+                            .push(Span::styled(caret, Style::default().fg(theme::color::FG)));
+                    }
+                }
             }
         }
 

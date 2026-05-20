@@ -52,7 +52,32 @@ pub(super) async fn tool_read_file(args: &Value, ctx: &ToolContext) -> Result<St
     let resolved = resolve_in_workspace(&ctx.workspace, path)?;
     let bytes = tokio::fs::read(&resolved).await?;
     let text = String::from_utf8_lossy(&bytes).to_string();
-    Ok(truncate_utf8(text, MAX_FILE_BYTES))
+    let truncated = truncate_utf8(text, MAX_FILE_BYTES);
+    Ok(number_lines(&truncated))
+}
+
+/// Prefix every line with `<line_no>\t` so the model can identify
+/// unique regions when forming `edit_file` / `multi_edit` snippets.
+/// Mirrors Claude Code's `Read` output format — the model is
+/// already trained to strip these prefixes before quoting content
+/// into `old_string`, and the line numbers double as a coordinate
+/// system the model can refer to in chat. The numbering reflects
+/// what's actually shown (i.e. after truncation), not the
+/// original file's line count, so the model never sees a number
+/// that points past the visible content.
+fn number_lines(s: &str) -> String {
+    use std::fmt::Write;
+    if s.is_empty() {
+        return String::new();
+    }
+    // Estimate output size: original bytes + ~6 bytes/line for "NNNN\t".
+    // `lines()` is O(n); reserving once avoids repeated re-allocs on big files.
+    let line_count = s.lines().count();
+    let mut out = String::with_capacity(s.len() + line_count * 6);
+    for (i, line) in s.lines().enumerate() {
+        let _ = writeln!(out, "{}\t{}", i + 1, line);
+    }
+    out
 }
 
 pub(super) async fn tool_list_dir(args: &Value, ctx: &ToolContext) -> Result<String> {

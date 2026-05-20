@@ -15,10 +15,8 @@ use crate::app::App;
 
 use super::super::markdown::{parse_inline_md, wrap_styled_segments};
 use super::super::theme;
-use super::centered_rect;
 
-pub(in crate::ui) fn render_add_model(f: &mut Frame, full: Rect, app: &mut App) {
-    let area = centered_rect(70, 40, full);
+pub(in crate::ui) fn render_add_model(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(Clear, area);
 
     // Single-step modal — pasting the API key is the whole flow.

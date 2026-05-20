@@ -15,10 +15,8 @@ use crate::app::{App, TelegramSetupStep};
 
 use super::super::markdown::{parse_inline_md, wrap_styled_segments};
 use super::super::theme;
-use super::centered_rect;
 
-pub(in crate::ui) fn render_telegram_setup(f: &mut Frame, full: Rect, app: &mut App) {
-    let area = centered_rect(70, 55, full);
+pub(in crate::ui) fn render_telegram_setup(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(Clear, area);
 
     let bot_username = app.telegram.as_ref().and_then(|rt| rt.bot_username.clone());

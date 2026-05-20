@@ -6,7 +6,7 @@ use crate::api::ApiOp;
 use crate::ollama::ChatMessage;
 use crate::tools;
 
-use super::super::{App, Mode};
+use super::super::{App, Mode, ShellRuntime};
 
 impl App {
     pub(super) fn on_tool_start(&mut self, name: String, args: serde_json::Value) {
@@ -50,6 +50,40 @@ impl App {
             let _ = api_tx.send(ApiOp::ToolResult { name, output });
         }
         self.active_tool_msg_idx = None;
+    }
+
+    pub(super) fn on_shell_start(
+        &mut self,
+        command: String,
+        kill_tx: tokio::sync::oneshot::Sender<()>,
+    ) {
+        self.active_shell = Some(ShellRuntime {
+            command,
+            started_at: std::time::Instant::now(),
+            output: Vec::new(),
+            running: true,
+            exit_code: None,
+            kill_tx: Some(kill_tx),
+            scroll: 0,
+            follow_tail: true,
+        });
+    }
+
+    pub(super) fn on_shell_output(&mut self, line: String, is_stderr: bool) {
+        if let Some(rt) = self.active_shell.as_mut() {
+            rt.push_line(line, is_stderr);
+        }
+    }
+
+    pub(super) fn on_shell_done(&mut self, exit_code: Option<i32>) {
+        if let Some(rt) = self.active_shell.as_mut() {
+            rt.running = false;
+            rt.exit_code = Some(exit_code);
+            // Drop the kill handle — there's nothing left to kill, and
+            // leaving the sender around invites a confused later
+            // `.send(())` that would panic on a closed receiver.
+            rt.kill_tx = None;
+        }
     }
 
     pub(super) fn on_confirm_request(&mut self, req: tools::ConfirmRequest) {

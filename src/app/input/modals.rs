@@ -160,7 +160,17 @@ impl App {
                         }
                     }
                     let _ = req.responder.send(true);
-                    self.push_info(format!("✓ Allowed: {}", req.prompt));
+                    // Memory ops already render a tight `memory · save …`
+                    // tile + a result row — adding a third `✓ Allowed:`
+                    // info line just for them is noise. Other tools
+                    // (write_file / edit_file / run_command) still get
+                    // the line so the user can see what they greenlit.
+                    let is_memory_op = req.prompt.starts_with("SAVE memory")
+                        || req.prompt.starts_with("UPDATE memory")
+                        || req.prompt.starts_with("FORGET memory");
+                    if !is_memory_op {
+                        self.push_info(format!("✓ Allowed: {}", req.prompt));
+                    }
                     // If we'd also DM'd this prompt to Telegram, overwrite
                     // the original message there so the buttons no longer
                     // look actionable.
@@ -189,6 +199,72 @@ impl App {
                     }
                 }
                 self.mode = Mode::Chat;
+            }
+            _ => {}
+        }
+        AppAction::Continue
+    }
+
+    /// Key routing for the shell monitor overlay. Esc hides the overlay
+    /// (the child keeps running and the runtime stays in `active_shell`,
+    /// so the user can re-open via the footer indicator). Ctrl+C fires
+    /// the kill channel so the shell tool's `tokio::select!` reaps the
+    /// child and reports `[killed by user]`. PgUp/PgDn scroll the
+    /// buffer; we drop `follow_tail` on PgUp so new output doesn't
+    /// snap the user back to the bottom while they're reading history.
+    pub(in crate::app) fn handle_shell_monitor_key(&mut self, key: KeyEvent) -> AppAction {
+        match key.code {
+            KeyCode::Esc => {
+                // If the shell has already exited, dismiss the runtime
+                // entirely — there's nothing left to monitor and the
+                // archived output lives on in the tool tile.
+                let finished = self
+                    .active_shell
+                    .as_ref()
+                    .map(|rt| !rt.running)
+                    .unwrap_or(true);
+                if finished {
+                    self.active_shell = None;
+                }
+                self.mode = Mode::Chat;
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(rt) = self.active_shell.as_mut() {
+                    if rt.running {
+                        if let Some(tx) = rt.kill_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(rt) = self.active_shell.as_mut() {
+                    rt.follow_tail = false;
+                    rt.scroll = rt.scroll.saturating_sub(5);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(rt) = self.active_shell.as_mut() {
+                    let next = rt.scroll.saturating_add(5);
+                    rt.scroll = next;
+                    // Re-arm follow if user scrolled past everything —
+                    // they're back at the live tail.
+                    let total = rt.output.len() as u16;
+                    if next >= total {
+                        rt.follow_tail = true;
+                    }
+                }
+            }
+            KeyCode::End => {
+                if let Some(rt) = self.active_shell.as_mut() {
+                    rt.follow_tail = true;
+                }
+            }
+            KeyCode::Home => {
+                if let Some(rt) = self.active_shell.as_mut() {
+                    rt.follow_tail = false;
+                    rt.scroll = 0;
+                }
             }
             _ => {}
         }

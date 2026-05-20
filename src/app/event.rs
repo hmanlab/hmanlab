@@ -47,6 +47,7 @@ impl App {
                     Mode::DisconnectPicker => Ok(self.handle_disconnect_picker(key)),
                     Mode::TelegramSetup => Ok(self.handle_telegram_setup_key(key, tx)),
                     Mode::AgentsSetup => Ok(self.handle_agents_setup_key(key, tx)),
+                    Mode::ShellMonitor => Ok(self.handle_shell_monitor_key(key)),
                     Mode::Chat => Ok(self.handle_chat(key, tx)),
                 }
             }
@@ -228,6 +229,19 @@ impl App {
         self.persist_assistant_if_any();
         self.active_tool_msg_idx = None;
         self.active_specialist = None;
+        // If a shell was in flight, the dropped tool task never gets to
+        // send `ShellDone` — `kill_on_drop(true)` on the Command kills
+        // the child, but the runtime would sit forever with
+        // `running=true` and the footer would lie. Finalize manually
+        // here so the indicator clears and the monitor (if open) reads
+        // as killed.
+        if let Some(rt) = self.active_shell.as_mut() {
+            if rt.running {
+                rt.running = false;
+                rt.exit_code = Some(None);
+                rt.kill_tx = None;
+            }
+        }
         // If the cancelled turn was answering a Telegram DM, let the
         // sender know — silence on their end would be worse than a curt
         // explanation. Best-effort; the bot may already be down.

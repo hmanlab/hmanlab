@@ -105,6 +105,22 @@ pub(super) fn tool_summary(name: &str, args: Option<&serde_json::Value>) -> Stri
                 get_str("name").unwrap_or_else(|| "?".into())
             )
         }
+        // Memory ops — collapse to `memory · verb {slug}` instead of the
+        // default JSON dump. `save_memory`'s args carry the full body
+        // text, which would otherwise inline several KB of prose into
+        // the tile header. The slug alone is the signal worth showing.
+        "save_memory" => format!(
+            "memory · save {}",
+            get_str("name").unwrap_or_else(|| "?".into())
+        ),
+        "read_memory" => format!(
+            "memory · read {}",
+            get_str("name").unwrap_or_else(|| "?".into())
+        ),
+        "forget_memory" => format!(
+            "memory · forget {}",
+            get_str("name").unwrap_or_else(|| "?".into())
+        ),
         other => {
             let json = args
                 .and_then(|v| serde_json::to_string(v).ok())
