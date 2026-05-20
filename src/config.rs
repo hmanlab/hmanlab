@@ -147,6 +147,26 @@ pub const BYOK_PROVIDERS: &[&str] = &[
     OPENROUTER_PROVIDER,
 ];
 
+/// hmanlab-hosted free chat — proxied through hmanlab-api with the
+/// maintainer's upstream OpenCode key. The user's own `bai_` token
+/// (already required for session persistence) is the only credential
+/// needed; there's no separate provider key to add. NOT listed in
+/// [`BYOK_PROVIDERS`] because there's no "+ Add … key" row to render
+/// — availability is implicit in having a working hmanlab-api connection.
+///
+/// The CLI builds an OpenAI-compatible client pointing at
+/// `<api_url>/v1/chat/completions`; the API enforces a per-day quota
+/// and a per-minute rate limit before forwarding upstream. See
+/// `hmanlab-stack/packages/api/src/routes/chat.ts` for the server side.
+pub const HMANLAB_HOSTED_PROVIDER: &str = "hmanlab-free";
+
+/// Models the hosted proxy currently exposes. Keep this in lockstep with
+/// the `MODEL_WHITELIST` in `hmanlab-stack/packages/api/src/routes/chat.ts`
+/// — the API server rejects anything not in its own list, so listing a
+/// model here that the server hasn't whitelisted will produce a 400 at
+/// runtime. Start narrow; expand as usage patterns settle.
+pub const HMANLAB_HOSTED_MODELS: &[&str] = &["deepseek-v4-flash"];
+
 /// Human-readable provider name for UI display. Used by the picker's
 /// `+ Add <name> key` rows, the `/disconnect` list, and `/settings`.
 /// Falls back to the raw provider id for anything we don't know about
@@ -158,6 +178,7 @@ pub fn provider_label(provider: &str) -> &str {
         OLLAMA_CLOUD_PROVIDER => "Ollama Cloud",
         OPENCODE_PROVIDER => "OpenCode Go",
         OPENROUTER_PROVIDER => "OpenRouter",
+        HMANLAB_HOSTED_PROVIDER => "hmanlab (free)",
         other => other,
     }
 }

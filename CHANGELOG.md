@@ -8,21 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.1] - 2026-05-20
 
 ### What's new
-- **Live shell monitor.** When the agent runs a `run_command`, the status bar shows a pulsing `● 1 shell running` indicator. Click it to open a monitor overlay that streams stdout and stderr in real time, with a blinking cursor at the tail. `Esc` hides the monitor and the shell keeps running; `Ctrl+C` inside the monitor kills the child cleanly and the badge flips to `✗ killed`. Hard timeout lifted from 30 s to 10 min so real workflows (test suites, builds) finish without the agent giving up — and you can always interrupt earlier.
-- **Typing-cursor on streaming replies.** A `▌` caret blinks at the end of the assistant's in-flight message while it streams. Disappears the instant the turn ends and stays out of copy-on-drag selections.
-- **`apply_patch` tool with V4A envelope.** New atomic primitive for multi-region content changes — the model emits a single `*** Begin Patch` / `*** End Patch` envelope with `Add File` / `Update File` / `Delete File` blocks and `@@` hunks, hmanlab parses it, validates every hunk against the matcher cascade, and applies the whole patch in one confirm popup. Models trained on Codex / GPT-5 traces already know this format. Replaces the old "panic-rewrite via write_file" failure path on multi-region edits.
-- **Coordinate-based line ops: `move_lines`, `delete_lines`, `insert_at`.** The model passes line numbers (1-indexed, end-inclusive) instead of file content — so it can't get tripped up by whitespace drift, dropped list markers, or output-token truncation when doing structural changes. `move_lines(path, from_start, from_end, to_before)` is now the headline primitive for section reorders and block moves; `insert_at` lets the model splice in new content without ever reproducing existing lines. The tool descriptions explicitly steer the model toward these for rearrangements and away from `write_file`.
+- **Free hosted DeepSeek v4 Flash.** New `[hmanlab-free]` provider in the model picker — no extra API key, just your existing hmanlab account. 200 requests/day per user. Check remaining quota in `/settings`.
+- **Live shell monitor.** Click the `● 1 shell running` indicator in the status bar to watch stdout/stderr stream in real time. `Esc` hides it, `Ctrl+C` kills the shell. Shell timeout raised from 30 s to 10 min.
+- **Typing-cursor on streaming replies.** A `▌` blinks at the tail of the assistant's in-flight message while it streams.
+- **`apply_patch` tool.** Codex-style patch envelope for multi-region edits — replaces the old "panic-rewrite the whole file" failure mode on big rearrangements.
+- **Coordinate edits: `move_lines`, `delete_lines`, `insert_at`.** Pass line numbers instead of file content. `move_lines(path, from_start, from_end, to_before)` is the new go-to for section reorders and block moves.
 
 ### Changed
-- **`read_file` output now carries line numbers.** Every line is returned as `<n>\t<content>` — the model gets a coordinate system it can use directly when forming `edit_file` snippets or calling `move_lines`. Stripped before quoting back into `old_string` (the tool description spells this out).
-- **`edit_file` and `multi_edit` accept `replace_all: true`.** Default behavior unchanged (strict single-match), but the model can opt in for genuine bulk renames. The ambiguity error now points the model at both recovery paths (expand context OR set `replace_all`) so it doesn't fall back to wholesale `write_file` rewrites.
-- **Fuzzy-match cascade in `edit_file` / `multi_edit`.** When the exact `old_string` doesn't land, the matcher tries line-trimmed (catches trailing-whitespace drift) and block-anchor (catches middle-line drift while boundaries are right) strategies. Each still demands exactly one match — fuzziness lives in *how* we find the span, not in *what* we substitute.
-- **All modal popups now split-pane instead of floating.** Model picker, sessions, confirm dialog, add-model, telegram setup, agents wizard, shell monitor — they all render in the bottom half of the chat column. The conversation stays visible in the top half so you can still see context while you pick / approve.
-- **Memory tool rows are now one line.** `save_memory` / `read_memory` / `forget_memory` render as `memory · save <slug>` in the chat tile instead of dumping the full JSON arg blob (which could inline several KB of memory body into the header). The redundant `✓ Allowed: …` system line is also suppressed for memory operations — the tile itself already tells you what happened.
+- **`read_file` now returns numbered lines** (`<n>\t<content>`) so the model can refer to lines by number when calling `edit_file` or `move_lines`.
+- **`edit_file` / `multi_edit` accept `replace_all: true`** for bulk renames. Strict single-match stays the default.
+- **Fuzzier matching for `edit_file` / `multi_edit`.** Catches near-miss snippets (trailing-whitespace drift, block-anchor matches) without crossing the "ambiguous" safety line.
+- **All popups split the chat column 50/50** (picker, confirm, shell monitor, etc.) so the conversation stays visible while you approve or pick.
+- **Memory tool rows are one line.** `save_memory` / `read_memory` / `forget_memory` now read `memory · save <slug>` instead of dumping the full JSON.
 
 ### Fixed
-- **README-style section moves no longer panic-rewrite the whole file.** The old failure was structural: `edit_file` / `multi_edit` / `apply_patch` all required the model to reproduce file content byte-perfectly as a tool-call argument, and long reproductions hit token-budget truncation or whitespace-drift errors. `move_lines` retires that entire failure class by taking integer coordinates — the model never reproduces content, so reproduction errors are impossible. Section-swap requests that previously cycled through three failed `apply_patch` calls before giving up now land in one `move_lines` call.
-- **Cancelling an agent turn while a shell was running no longer leaves the footer indicator stuck.** The `cancel()` path now finalizes the active `ShellRuntime` so the `● 1 shell running` indicator disappears when the underlying child process is killed.
+- **Section moves no longer panic-rewrite whole files.** `move_lines` lets the model express a reorder without reproducing content, retiring the truncation/drift failure class.
+- **Cancelling a turn mid-shell clears the footer indicator** — was leaving `● 1 shell running` stuck on.
 
 [0.2.1]: https://github.com/hmanlab/hmanlab/compare/0.2.0...0.2.1
 
