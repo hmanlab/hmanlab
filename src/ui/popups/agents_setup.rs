@@ -20,10 +20,8 @@ use crate::app::{AgentsSetupStep, App};
 
 use super::super::markdown::{parse_inline_md, wrap_styled_segments};
 use super::super::theme;
-use super::centered_rect;
 
-pub(in crate::ui) fn render_agents_setup(f: &mut Frame, full: Rect, app: &mut App) {
-    let area = centered_rect(72, 70, full);
+pub(in crate::ui) fn render_agents_setup(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(Clear, area);
 
     let title_verb = if app.agents_setup_editing.is_some() {

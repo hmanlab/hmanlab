@@ -17,13 +17,8 @@ use crate::tools;
 
 use super::super::markdown::{parse_inline_md, wrap_styled_segments};
 use super::super::theme;
-use super::centered_rect;
 
-pub(in crate::ui) fn render_confirm(f: &mut Frame, full: Rect, app: &mut App) {
-    // Bigger popup than before — edit_file/write_file prompts include old/new
-    // string previews that easily overflow the 70x40 box the original
-    // run_command-style confirm was sized for.
-    let area = centered_rect(80, 60, full);
+pub(in crate::ui) fn render_confirm(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(Clear, area);
 
     let prompt = app

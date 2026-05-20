@@ -18,7 +18,10 @@ use crate::app::StreamMsg;
 mod definitions;
 mod diff;
 mod git;
+mod lines;
+mod matchers;
 mod memory_tools;
+mod patch;
 mod read;
 mod shell;
 mod workspace;
@@ -92,6 +95,7 @@ fn resolve_tool_alias(name: &str) -> &str {
         "Edit" => "edit_file",
         "MultiEdit" => "multi_edit",
         "Write" => "write_file",
+        "ApplyPatch" => "apply_patch",
         other => other,
     }
 }
@@ -162,6 +166,10 @@ pub async fn execute_tool(name: &str, args: &Value, ctx: &ToolContext) -> Result
         "edit_file" => write::tool_edit_file(args, ctx).await,
         "multi_edit" => write::tool_multi_edit(args, ctx).await,
         "write_file" => write::tool_write_file(args, ctx).await,
+        "apply_patch" => patch::tool_apply_patch(args, ctx).await,
+        "move_lines" => lines::tool_move_lines(args, ctx).await,
+        "delete_lines" => lines::tool_delete_lines(args, ctx).await,
+        "insert_at" => lines::tool_insert_at(args, ctx).await,
         "run_command" => shell::tool_run_command(args, ctx).await,
         "save_memory" => memory_tools::tool_save_memory(args, ctx).await,
         "read_memory" => memory_tools::tool_read_memory(args, ctx).await,

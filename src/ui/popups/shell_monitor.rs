@@ -24,25 +24,9 @@ pub(in crate::ui) fn render_shell_monitor(f: &mut Frame, area: Rect, app: &mut A
         return;
     };
 
-    // Center an 80%-wide, 70%-tall panel. Same proportions as the
-    // confirm popup so visual weight is consistent across overlays.
-    let v = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(15),
-            Constraint::Percentage(70),
-            Constraint::Percentage(15),
-        ])
-        .split(area);
-    let h = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(10),
-            Constraint::Percentage(80),
-            Constraint::Percentage(10),
-        ])
-        .split(v[1]);
-    let panel = h[1];
+    // Modal popups now fill the bottom half of the chat column edge to
+    // edge — `area` is already exactly that rect. No interior centering.
+    let panel = area;
 
     // Status badge — colors carry the lifecycle: peach=running,
     // green=clean exit, red=non-zero or signal-killed.

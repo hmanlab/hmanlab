@@ -53,6 +53,35 @@ pub(super) fn resolve_in_workspace(workspace: &Path, input: &str) -> Result<Path
     Ok(abs_canon)
 }
 
+/// Resolve a path inside the workspace, read its bytes, and decode as
+/// strict UTF-8. The shared entry point for any tool that needs to
+/// load a file before mutating it (`edit_file`, `multi_edit`,
+/// `apply_patch`, the `lines` family) — gathers the four steps that
+/// previously appeared at every call site:
+///   1. Workspace-boundary resolve.
+///   2. Read bytes from disk.
+///   3. Decode as strict UTF-8 (binary files are rejected — the
+///      mutating tools operate on text only).
+///   4. Wrap each failure with a `{tool}: ...` prefix so the model's
+///      error mentions the tool it called, not a bare std error.
+///
+/// Returns the resolved absolute path + the file content. Callers
+/// keep the path so they can write the result back to the same
+/// location after the user approves the change.
+pub(super) async fn read_text_file(
+    workspace: &Path,
+    path: &str,
+    tool: &'static str,
+) -> Result<(PathBuf, String)> {
+    let resolved = resolve_in_workspace(workspace, path)?;
+    let bytes = tokio::fs::read(&resolved)
+        .await
+        .map_err(|e| anyhow!("{tool}: failed to read '{}': {e}", path))?;
+    let text =
+        String::from_utf8(bytes).map_err(|_| anyhow!("{tool}: '{}' is not valid UTF-8", path))?;
+    Ok((resolved, text))
+}
+
 pub(super) fn truncate_utf8(mut s: String, max: usize) -> String {
     if s.len() <= max {
         return s;

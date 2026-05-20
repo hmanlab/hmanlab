@@ -65,6 +65,33 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.render.sidebar_h = 0;
         app.render.sidebar_targets.clear();
     }
+    // Modal popups split the chat column 50/50 — chat shrinks to the
+    // top half, popup occupies the bottom half. Picked over the
+    // older floating-centered overlay so the user can still see the
+    // conversation while picking a model, confirming a tool, watching
+    // the shell, etc. Inline autocomplete is NOT modal (anchored above
+    // the input) so it doesn't take the bottom half.
+    let popup_active = matches!(
+        app.mode,
+        Mode::ModelPicker
+            | Mode::Confirm
+            | Mode::AddModel
+            | Mode::SessionPicker
+            | Mode::DisconnectPicker
+            | Mode::TelegramSetup
+            | Mode::AgentsSetup
+            | Mode::ShellMonitor
+    );
+    let (chat_area, popup_area) = if popup_active {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chat_area);
+        (split[0], Some(split[1]))
+    } else {
+        (chat_area, None)
+    };
+
     // While a file is open the viewer takes the chat column. The chat panel
     // still keeps its scroll state so closing the viewer returns to exactly
     // the same conversation view.
@@ -83,29 +110,21 @@ pub fn render(f: &mut Frame, app: &mut App) {
         popups::render_inline_popup(f, chunks[2], app);
     }
 
-    if app.mode == Mode::ModelPicker {
-        popups::render_picker(f, area, app);
-    }
-    if app.mode == Mode::Confirm {
-        popups::render_confirm(f, area, app);
-    }
-    if app.mode == Mode::AddModel {
-        popups::render_add_model(f, area, app);
-    }
-    if app.mode == Mode::SessionPicker {
-        popups::render_session_picker(f, area, app);
-    }
-    if app.mode == Mode::DisconnectPicker {
-        popups::render_disconnect_picker(f, area, app);
-    }
-    if app.mode == Mode::TelegramSetup {
-        popups::render_telegram_setup(f, area, app);
-    }
-    if app.mode == Mode::AgentsSetup {
-        popups::render_agents_setup(f, area, app);
-    }
-    if app.mode == Mode::ShellMonitor {
-        popups::render_shell_monitor(f, area, app);
+    // Modal popups render into the bottom half of the (split) chat
+    // column. They no longer compute their own centered rect — the
+    // outer `popup_area` IS their rect; they fill it edge-to-edge.
+    if let Some(p) = popup_area {
+        match app.mode {
+            Mode::ModelPicker => popups::render_picker(f, p, app),
+            Mode::Confirm => popups::render_confirm(f, p, app),
+            Mode::AddModel => popups::render_add_model(f, p, app),
+            Mode::SessionPicker => popups::render_session_picker(f, p, app),
+            Mode::DisconnectPicker => popups::render_disconnect_picker(f, p, app),
+            Mode::TelegramSetup => popups::render_telegram_setup(f, p, app),
+            Mode::AgentsSetup => popups::render_agents_setup(f, p, app),
+            Mode::ShellMonitor => popups::render_shell_monitor(f, p, app),
+            Mode::Chat => {}
+        }
     }
 }
 

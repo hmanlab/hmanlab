@@ -7,7 +7,8 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use super::diff::{diff_edit, diff_stats, diff_write};
-use super::workspace::resolve_in_workspace;
+use super::matchers::{find_all_matches, find_match, MatchRange, MatchResult};
+use super::workspace::{read_text_file, resolve_in_workspace};
 use super::{confirm, ToolContext};
 
 /// Hard cap on `write_file` content + `edit_file` strings. Above this the
@@ -29,6 +30,14 @@ pub(super) async fn tool_edit_file(args: &Value, ctx: &ToolContext) -> Result<St
         .get("new_string")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("edit_file requires 'new_string'"))?;
+    // Claude-Code-style escape hatch. Default off so a careless model can't
+    // accidentally rewrite every `---` separator or every `## Heading` in
+    // a markdown file — when the snippet is ambiguous the safe answer is
+    // "expand context", not "replace everything".
+    let replace_all = args
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     if old_string.is_empty() {
         bail!("edit_file: 'old_string' cannot be empty — use write_file to create a file");
@@ -40,39 +49,88 @@ pub(super) async fn tool_edit_file(args: &Value, ctx: &ToolContext) -> Result<St
         bail!("edit_file: strings exceed {MAX_WRITE_BYTES} byte cap");
     }
 
-    let resolved = resolve_in_workspace(&ctx.workspace, path)?;
-    let bytes = tokio::fs::read(&resolved).await?;
-    let content =
-        String::from_utf8(bytes).map_err(|_| anyhow!("edit_file: {} is not valid UTF-8", path))?;
+    let (resolved, content) = read_text_file(&ctx.workspace, path, "edit_file").await?;
 
-    let matches = content.matches(old_string).count();
-    if matches == 0 {
-        bail!(
-            "edit_file: 'old_string' not found in {}. Read the file first to confirm exact text \
-             (whitespace, tabs vs spaces, trailing newlines all count).",
-            path
-        );
-    }
-    if matches > 1 {
-        bail!(
-            "edit_file: 'old_string' appears {matches} times in {}. Expand the snippet with \
-             surrounding context until it's unique.",
-            path
-        );
-    }
+    // Two paths through the matcher cascade:
+    //   - replace_all: gather every match the first-hitting strategy
+    //     returns, swap them all.
+    //   - default: demand exactly one match across the cascade. A
+    //     fuzzy strategy (line-trimmed, block-anchor) may rescue a
+    //     snippet whose whitespace drifted from the source; the
+    //     final span we replace is still byte-precise on the file.
+    let (updated, replacements) = if replace_all {
+        let ranges = find_all_matches(&content, old_string);
+        if ranges.is_empty() {
+            bail!(
+                "edit_file: 'old_string' not found in {}. Read the file first to confirm exact \
+                 text (whitespace, tabs vs spaces, trailing newlines all count).",
+                path
+            );
+        }
+        (replace_ranges(&content, &ranges, new_string), ranges.len())
+    } else {
+        match find_match(&content, old_string) {
+            MatchResult::Unique(r) => {
+                let mut out = String::with_capacity(content.len() + new_string.len());
+                out.push_str(&content[..r.start]);
+                out.push_str(new_string);
+                out.push_str(&content[r.end..]);
+                (out, 1)
+            }
+            MatchResult::Ambiguous { count, .. } => bail!(
+                "edit_file: 'old_string' appears {count} times in {}. Either expand the snippet \
+                 with surrounding context until it's unique, or set `replace_all: true` to \
+                 change every instance (useful for renaming a variable across the file).",
+                path
+            ),
+            MatchResult::NotFound => bail!(
+                "edit_file: 'old_string' not found in {}. Read the file first to confirm exact \
+                 text (whitespace, tabs vs spaces, trailing newlines all count). If the snippet \
+                 spans multiple regions of the file, prefer apply_patch.",
+                path
+            ),
+        }
+    };
 
-    // Compute the diff first so the prompt can use `+NL -NL` line totals
-    // instead of raw byte counts — much easier for the user to size up.
     let diff = diff_edit(old_string, new_string);
     let (added, removed) = diff_stats(&diff);
-    let prompt = format!("Edit file {} (+{added}L -{removed}L)", resolved.display(),);
+    let count_suffix = if replacements > 1 {
+        format!(" · {replacements} replacements")
+    } else {
+        String::new()
+    };
+    let prompt = format!(
+        "Edit file {} (+{added}L -{removed}L{count_suffix})",
+        resolved.display(),
+    );
     if !confirm(ctx, prompt, diff).await? {
         return Ok("(user denied this edit)".into());
     }
 
-    let updated = content.replacen(old_string, new_string, 1);
     tokio::fs::write(&resolved, updated.as_bytes()).await?;
-    Ok(format!("edited {} (1 replacement)", path))
+    Ok(format!(
+        "edited {} ({} replacement{})",
+        path,
+        replacements,
+        if replacements > 1 { "s" } else { "" }
+    ))
+}
+
+/// Apply `new` at every range in `ranges` to `content`, returning the
+/// rewritten string. Ranges must be non-overlapping and sorted by
+/// start position — guaranteed by [`find_all_matches`], which scans
+/// the content in order and never returns overlaps within a single
+/// strategy's output.
+fn replace_ranges(content: &str, ranges: &[MatchRange], new: &str) -> String {
+    let mut out = String::with_capacity(content.len() + ranges.len() * new.len());
+    let mut cursor = 0usize;
+    for r in ranges {
+        out.push_str(&content[cursor..r.start]);
+        out.push_str(new);
+        cursor = r.end;
+    }
+    out.push_str(&content[cursor..]);
+    out
 }
 
 /// Batched surgical edit: apply N `{old_string, new_string}` pairs to the
@@ -98,10 +156,7 @@ pub(super) async fn tool_multi_edit(args: &Value, ctx: &ToolContext) -> Result<S
         bail!("multi_edit: 'edits' must contain at least one {{old_string, new_string}} pair");
     }
 
-    let resolved = resolve_in_workspace(&ctx.workspace, path)?;
-    let bytes = tokio::fs::read(&resolved).await?;
-    let original =
-        String::from_utf8(bytes).map_err(|_| anyhow!("multi_edit: {} is not valid UTF-8", path))?;
+    let (resolved, original) = read_text_file(&ctx.workspace, path, "multi_edit").await?;
 
     // Apply in-memory first so a mid-batch failure leaves the file on disk
     // untouched. Each edit's `old_string` is re-matched against the running
@@ -117,6 +172,13 @@ pub(super) async fn tool_multi_edit(args: &Value, ctx: &ToolContext) -> Result<S
             .get("new_string")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("multi_edit: edit #{i} missing 'new_string'"))?;
+        // Per-edit Claude-Code-style escape hatch — `replace_all` lives on
+        // each edit object so a single batch can mix unique-target edits
+        // with rename-style edits without splitting into two tool calls.
+        let replace_all = edit
+            .get("replace_all")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if old.is_empty() {
             bail!("multi_edit: edit #{i} has empty 'old_string' — use write_file to create a file");
         }
@@ -126,23 +188,45 @@ pub(super) async fn tool_multi_edit(args: &Value, ctx: &ToolContext) -> Result<S
         if old.len() > MAX_WRITE_BYTES || new.len() > MAX_WRITE_BYTES {
             bail!("multi_edit: edit #{i} strings exceed {MAX_WRITE_BYTES} byte cap");
         }
-        let matches = current.matches(old).count();
-        if matches == 0 {
-            bail!(
-                "multi_edit: edit #{i} 'old_string' not found in {} (after prior edits). \
-                 Either the snippet doesn't exist or a previous edit in this batch already \
-                 rewrote that region — read the file and rebuild the batch.",
-                path
-            );
-        }
-        if matches > 1 {
-            bail!(
-                "multi_edit: edit #{i} 'old_string' appears {matches} times in {}. Expand the \
-                 snippet with surrounding context until it's unique.",
-                path
-            );
-        }
-        current = current.replacen(old, new, 1);
+        // Same cascade as `edit_file`. Each edit is independent —
+        // the matcher runs against the running buffer state (post
+        // prior edits), so a later edit can target text an earlier
+        // edit produced.
+        current = if replace_all {
+            let ranges = find_all_matches(&current, old);
+            if ranges.is_empty() {
+                bail!(
+                    "multi_edit: edit #{i} 'old_string' not found in {} (after prior edits). \
+                     Either the snippet doesn't exist or a previous edit in this batch already \
+                     rewrote that region — read the file and rebuild the batch.",
+                    path
+                );
+            }
+            replace_ranges(&current, &ranges, new)
+        } else {
+            match find_match(&current, old) {
+                MatchResult::Unique(r) => {
+                    let mut out = String::with_capacity(current.len() + new.len());
+                    out.push_str(&current[..r.start]);
+                    out.push_str(new);
+                    out.push_str(&current[r.end..]);
+                    out
+                }
+                MatchResult::Ambiguous { count, .. } => bail!(
+                    "multi_edit: edit #{i} 'old_string' appears {count} times in {}. Either \
+                     expand the snippet with surrounding context until it's unique, or set \
+                     `replace_all: true` on this edit to change every instance.",
+                    path
+                ),
+                MatchResult::NotFound => bail!(
+                    "multi_edit: edit #{i} 'old_string' not found in {} (after prior edits). \
+                     Either the snippet doesn't exist or a previous edit in this batch already \
+                     rewrote that region — read the file and rebuild the batch. If the edit \
+                     spans multiple regions, prefer apply_patch.",
+                    path
+                ),
+            }
+        };
     }
 
     // One confirm popup, one cumulative diff against the on-disk original.

@@ -12,10 +12,8 @@ use ratatui::{
 use crate::app::App;
 
 use super::super::theme;
-use super::centered_rect;
 
-pub(in crate::ui) fn render_disconnect_picker(f: &mut Frame, full: Rect, app: &App) {
-    let area = centered_rect(60, 50, full);
+pub(in crate::ui) fn render_disconnect_picker(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Clear, area);
     let items: Vec<ListItem> = app
         .disconnect_picker
