@@ -44,6 +44,7 @@ impl App {
         self.last_prompt_tokens = 0;
         self.agent_token_tally.clear();
         self.drop_pending_compact_user();
+        self.pending_attachments.clear();
         self.scroll = 0;
         self.follow = true;
         self.page_state = crate::app::PageState::Idle;
@@ -62,6 +63,7 @@ impl App {
         self.last_prompt_tokens = 0;
         self.agent_token_tally.clear();
         self.drop_pending_compact_user();
+        self.pending_attachments.clear();
         self.scroll = 0;
         self.follow = true;
         self.loaded_session_id = None;

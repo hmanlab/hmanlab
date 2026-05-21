@@ -134,6 +134,16 @@ impl App {
                     self.update_inline_popup();
                     return AppAction::Continue;
                 }
+                // Ctrl+V — try clipboard image first (queue as
+                // attachment), fall back to text paste into the
+                // textarea. Matches the chat-app convention of "one key
+                // for paste, app figures out what kind".
+                KeyCode::Char('v') => {
+                    self.paste_from_clipboard();
+                    self.update_inline_popup();
+                    self.soft_wrap_input();
+                    return AppAction::Continue;
+                }
                 _ => {}
             }
         }

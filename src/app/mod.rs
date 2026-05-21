@@ -13,7 +13,7 @@ use tui_textarea::TextArea;
 
 use crate::api::{self, ApiOp};
 use crate::config::ExtraModel;
-use crate::ollama::{ChatMessage, Client};
+use crate::ollama::{Attachment, ChatMessage, Client};
 use crate::tools;
 
 mod backend;
@@ -339,6 +339,11 @@ pub struct App {
     /// attribution + the "[name] working…" status line), `None`
     /// otherwise. Cleared in `on_done` / `on_error` / `cancel`.
     pub active_specialist: Option<String>,
+    /// Image/media attachments queued by `/attach <path>` and waiting to
+    /// ride along with the next user submit. Drained into the user
+    /// `ChatMessage` in `start_turn`; cleared on `/clear`, `/new`,
+    /// and `cancel`. Not persisted to disk — re-attach if reloading.
+    pub pending_attachments: Vec<Attachment>,
 }
 
 /// Wizard scratch — what the user has typed across the four steps. On
@@ -497,6 +502,7 @@ impl App {
             agents_setup_input: fresh_textarea(),
             agents_setup_error: None,
             active_specialist: None,
+            pending_attachments: Vec::new(),
         }
     }
 }

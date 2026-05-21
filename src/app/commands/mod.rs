@@ -12,6 +12,7 @@
 
 pub(super) mod agent_templates;
 pub(super) mod agents;
+mod attach;
 mod disconnect;
 mod help;
 mod host;
@@ -51,6 +52,21 @@ pub(super) enum Command {
         name: String,
         query: String,
     },
+    /// `/attach <path>` — read a file from disk and queue it as an
+    /// attachment on the next user message. Images get inlined as
+    /// `image_url` parts; other media types ride along the same way
+    /// but only models that understand them will actually use the
+    /// bytes.
+    Attach(String),
+    /// `/detach [name|all]` — drop a queued attachment. Empty arg drops
+    /// the most recent; `all` clears the queue; a partial filename
+    /// drops the first match.
+    Detach(String),
+    /// `/paste` — pull the current clipboard into chat. Image → queued
+    /// as attachment; text → inserted into the input. Mirrors Ctrl+V;
+    /// exists as an explicit fallback for terminals that swallow
+    /// Ctrl+V before the app sees it.
+    Paste,
     Unknown(String),
 }
 
@@ -144,6 +160,9 @@ pub(super) fn parse_command(text: &str) -> Option<Command> {
         Some("telegram") => Command::Telegram(parse_telegram_sub(&rest)),
         Some("agents") => Command::Agents(parse_agents_sub(&rest)),
         Some("ask") => parse_ask(&rest),
+        Some("attach") => Command::Attach(rest),
+        Some("detach") => Command::Detach(rest),
+        Some("paste") => Command::Paste,
         Some(_) | None => Command::Unknown(head.to_ascii_lowercase()),
     })
 }

@@ -1,6 +1,6 @@
 [package]
 name = "hmanlab"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.74"
 description = "Terminal UI for chatting with local Ollama and BYOK LLM providers, with agentic tool use and persistent memory."
@@ -27,6 +27,9 @@ tui-textarea = "0.7"
 glob = "0.3"
 base64 = "0.22"
 similar = "2"
+mime_guess = "2"
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
+png = "0.17"
 
 [profile.release]
 lto = "thin"

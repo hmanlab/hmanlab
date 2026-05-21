@@ -1,8 +1,65 @@
 use anyhow::{anyhow, Result};
+use base64::Engine;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::pin::Pin;
+
+/// An attachment (image or other media) accompanying a chat message.
+/// Stored as raw bytes; encoded as base64 data URL when serializing to
+/// the API format.
+#[derive(Clone, Debug)]
+pub struct Attachment {
+    /// MIME type, e.g. "image/png", "image/jpeg"
+    pub media_type: String,
+    /// Raw bytes of the file (not base64-encoded)
+    pub data: Vec<u8>,
+    /// Original filename for UI display
+    pub filename: String,
+}
+
+impl Attachment {
+    /// Read a file and create an Attachment, auto-detecting media type.
+    pub fn from_path(path: &std::path::Path) -> Result<Self> {
+        let data =
+            std::fs::read(path).map_err(|e| anyhow!("Failed to read {}: {}", path.display(), e))?;
+
+        let media_type = mime_guess::from_path(path)
+            .first()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(Self {
+            media_type,
+            data,
+            filename,
+        })
+    }
+
+    /// Encode as data URL for API payload: "data:image/png;base64,..."
+    pub fn to_data_url(&self) -> String {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&self.data);
+        format!("data:{};base64,{}", self.media_type, b64)
+    }
+
+    /// Human-readable size (e.g. "1.2 MB")
+    pub fn size_display(&self) -> String {
+        let bytes = self.data.len() as f64;
+        if bytes < 1024.0 {
+            format!("{} B", bytes as u64)
+        } else if bytes < 1024.0 * 1024.0 {
+            format!("{:.1} KB", bytes / 1024.0)
+        } else {
+            format!("{:.1} MB", bytes / (1024.0 * 1024.0))
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -34,6 +91,10 @@ pub struct ChatMessage {
     /// over the wire — only relevant locally to the UI.
     #[serde(skip)]
     pub diff: Option<Vec<crate::tools::DiffLine>>,
+    /// Image/media attachments. Not serialized to disk (session persistence)
+    /// — images should be re-read from disk, not stored in chat history JSON.
+    #[serde(default, skip_serializing, skip_deserializing)]
+    pub attachments: Vec<Attachment>,
 }
 
 impl ChatMessage {
@@ -64,6 +125,37 @@ impl ChatMessage {
             content,
             tool_calls: Some(calls),
             ..Default::default()
+        }
+    }
+
+    /// Serialize to the API format (content-parts array if attachments present,
+    /// or plain string otherwise). Returns a Value that can be used directly
+    /// in JSON payloads.
+    pub fn to_api_content(&self) -> Value {
+        if self.attachments.is_empty() {
+            Value::String(self.content.clone())
+        } else {
+            let mut parts = Vec::with_capacity(1 + self.attachments.len());
+
+            // Text part first
+            if !self.content.is_empty() {
+                parts.push(serde_json::json!({
+                    "type": "text",
+                    "text": self.content,
+                }));
+            }
+
+            // Image parts
+            for att in &self.attachments {
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": att.to_data_url(),
+                    }
+                }));
+            }
+
+            Value::Array(parts)
         }
     }
 }
@@ -110,13 +202,40 @@ impl Tool {
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
-    messages: &'a [ChatMessage],
+    messages: Vec<ApiMessage>,
     stream: bool,
     /// Disables the built-in chain-of-thought on thinking models (qwen3,
     /// deepseek-r1, etc.). No effect on non-thinking models.
     think: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<&'a [Tool]>,
+}
+
+/// Message format sent to the API — uses `content` as either a plain string
+/// or a content-parts array (text + image_url) depending on attachments.
+#[derive(Serialize)]
+struct ApiMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCall>>,
+    /// Either a string (text-only) or an array of content parts (multimodal)
+    content: Value,
+}
+
+impl From<&ChatMessage> for ApiMessage {
+    fn from(msg: &ChatMessage) -> Self {
+        Self {
+            role: msg.role.clone(),
+            name: msg.name.clone(),
+            tool_call_id: msg.tool_call_id.clone(),
+            tool_calls: msg.tool_calls.clone(),
+            content: msg.to_api_content(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -218,9 +337,10 @@ impl Client {
         tools: Option<Vec<Tool>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem>> + Send>>> {
         let url = format!("{}/api/chat", self.base);
+        let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
         let req = ChatRequest {
             model,
-            messages: &messages,
+            messages: api_messages,
             stream: true,
             think: false,
             tools: tools.as_deref(),
