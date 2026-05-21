@@ -5,14 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.2] - 2026-05-22
 
 ### What's new
 - **Image attachments.** Send images to multimodal models with `/attach <path>` — `@` autocompletes workspace files, or paste an absolute path. Queue up to 8 per turn (20 MB each); the input bar shows what's attached. `/detach` drops the last one, `/detach all` clears the queue. Images ride with your next message and are dropped after — re-attach for follow-ups. Works on Ollama vision models (`llava`, `qwen2-vl`, etc.) and any OpenAI-compatible provider with vision (OpenRouter vision models, z.ai, hmanlab-api).
 
 ### Fixed
 - **Continuing a loaded session on OpenCode (and similar strict providers) no longer fails with HTTP 400.** Affected the first message you sent after `/load`; new sessions were never affected.
-- **Image attachments now actually reach BYOK providers.** Previously, attaching an image and sending through OpenRouter / z.ai / OpenCode / hmanlab-api would silently drop the image. Ollama was unaffected.
+
+[0.2.2]: https://github.com/hmanlab/hmanlab/compare/0.2.1...0.2.2
 
 ## [0.2.1] - 2026-05-20
 
