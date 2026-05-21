@@ -62,6 +62,11 @@ pub(super) enum Command {
     /// the most recent; `all` clears the queue; a partial filename
     /// drops the first match.
     Detach(String),
+    /// `/paste` — pull the current clipboard into chat. Image → queued
+    /// as attachment; text → inserted into the input. Mirrors Ctrl+V;
+    /// exists as an explicit fallback for terminals that swallow
+    /// Ctrl+V before the app sees it.
+    Paste,
     Unknown(String),
 }
 
@@ -157,6 +162,7 @@ pub(super) fn parse_command(text: &str) -> Option<Command> {
         Some("ask") => parse_ask(&rest),
         Some("attach") => Command::Attach(rest),
         Some("detach") => Command::Detach(rest),
+        Some("paste") => Command::Paste,
         Some(_) | None => Command::Unknown(head.to_ascii_lowercase()),
     })
 }

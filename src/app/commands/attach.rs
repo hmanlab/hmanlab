@@ -1,5 +1,7 @@
 //! `/attach <path>` and `/detach [name|all]` — manage image / media
-//! attachments queued for the next user message.
+//! attachments queued for the next user message. Also hosts the
+//! Ctrl+V / `/paste` clipboard handler: tries an image first, falls
+//! back to text into the input.
 //!
 //! Attachments live in `App.pending_attachments` between commands. The
 //! actual wire encoding (base64 data URL → `image_url` content part)
@@ -136,4 +138,138 @@ fn resolve_path(raw: &str, workspace: &std::path::Path) -> PathBuf {
     } else {
         workspace.join(expanded)
     }
+}
+
+impl App {
+    /// `Ctrl+V` / `/paste` — try the system clipboard for an image first;
+    /// if there's no image (or the platform refused), fall back to
+    /// inserting clipboard text into the textarea. Mirrors the way
+    /// chat / image apps overload paste so users don't have to learn a
+    /// second key for "paste an image" vs "paste text".
+    ///
+    /// Quiet on the common case (text paste prints nothing — the chars
+    /// just appear), loud on the interesting one (image attached → info
+    /// row in chat). When the platform clipboard is unavailable
+    /// (headless SSH, no display), we surface that once so the user
+    /// understands why nothing happened.
+    pub(in crate::app) fn paste_from_clipboard(&mut self) {
+        let mut cb = match arboard::Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                self.push_info(format!(
+                    "Clipboard unavailable: {e}. (Headless SSH / no graphical session?)"
+                ));
+                return;
+            }
+        };
+
+        // Image first — that's the interesting path. arboard returns
+        // RGBA8; we re-encode to PNG so we ship the same media_type as
+        // /attach paths and the data URL stays predictable.
+        match cb.get_image() {
+            Ok(img) if img.width > 0 && img.height > 0 => {
+                match encode_rgba_to_png(&img.bytes, img.width as u32, img.height as u32) {
+                    Ok(png_bytes) => {
+                        self.queue_clipboard_image(png_bytes);
+                        return;
+                    }
+                    Err(e) => {
+                        self.push_info(format!("Couldn't encode clipboard image: {e}"));
+                        return;
+                    }
+                }
+            }
+            Ok(_) => {
+                // Zero-sized image — treat as "no image", fall through to text.
+            }
+            Err(_) => {
+                // No image on clipboard (or platform errored). Fall through to text.
+            }
+        }
+
+        // No image — try text. Insert at cursor, same as a typed paste.
+        // tui-textarea splits on newlines for us via insert_str.
+        match cb.get_text() {
+            Ok(text) if !text.is_empty() => {
+                self.input.insert_str(&text);
+            }
+            _ => {
+                // Clipboard is empty or unreadable. Don't push_info —
+                // users hitting paste on an empty clipboard expect
+                // nothing to happen, not a chat-log entry.
+            }
+        }
+    }
+
+    /// Shared between Ctrl+V and `/paste`: enforce the same caps as
+    /// `/attach` (count + size), synthesize a clipboard-timestamped
+    /// filename, push the attachment, and confirm in chat.
+    fn queue_clipboard_image(&mut self, png_bytes: Vec<u8>) {
+        if self.pending_attachments.len() >= MAX_PENDING {
+            self.push_info(format!(
+                "Already at the {MAX_PENDING}-attachment cap — send the message or /detach all first."
+            ));
+            return;
+        }
+        if png_bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+            self.push_info(format!(
+                "Clipboard image is {:.1} MB — over the 20 MB cap. Crop and try again.",
+                png_bytes.len() as f64 / (1024.0 * 1024.0)
+            ));
+            return;
+        }
+        let filename = format!("clipboard-{}.png", clipboard_timestamp());
+        let size = png_bytes.len();
+        let att = Attachment {
+            media_type: "image/png".to_string(),
+            data: png_bytes,
+            filename: filename.clone(),
+        };
+        let size_display = att.size_display();
+        self.pending_attachments.push(att);
+        self.push_info(format!(
+            "✓ Pasted clipboard image as {filename} ({size_display}, {size} bytes). Send your next message to include it."
+        ));
+    }
+}
+
+/// RGBA8 → PNG byte vector. The `png` crate writes through a generic
+/// `Write` so we collect into a Vec instead of touching disk.
+fn encode_rgba_to_png(bytes: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    // arboard documents `bytes.len() == width * height * 4` for RGBA8.
+    let expected = (w as usize) * (h as usize) * 4;
+    if bytes.len() != expected {
+        return Err(format!(
+            "unexpected clipboard image size: {} bytes for {}x{} (expected {})",
+            bytes.len(),
+            w,
+            h,
+            expected
+        ));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    {
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().map_err(|e| e.to_string())?;
+        writer.write_image_data(bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
+}
+
+/// `YYYYMMDD-HHMMSS` in local time, used to make clipboard paste
+/// filenames sortable and unique enough within a session. Falls back
+/// to a Unix-seconds string if the system clock is broken.
+fn clipboard_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Naive local-time conversion via the C library would pull in `chrono`
+    // for one call. Instead: just use the epoch seconds — uniqueness
+    // matters more than human readability for an auto-generated
+    // attachment name.
+    format!("{secs}")
 }

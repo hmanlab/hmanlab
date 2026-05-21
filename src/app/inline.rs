@@ -159,6 +159,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         desc: "drop a queued attachment (default: most recent)",
     },
     SlashCommand {
+        name: "paste",
+        aliases: &[],
+        args: "",
+        desc: "paste clipboard — image attaches, text inserts (same as Ctrl+V)",
+    },
+    SlashCommand {
         name: "update",
         aliases: &["upgrade", "selfupdate"],
         args: "",

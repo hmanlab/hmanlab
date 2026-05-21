@@ -84,6 +84,7 @@ impl App {
             Command::Ask { name, query } => self.handle_ask(name, query, tx),
             Command::Attach(path) => self.handle_attach(path),
             Command::Detach(arg) => self.handle_detach(arg),
+            Command::Paste => self.paste_from_clipboard(),
             Command::Unknown(name) => {
                 self.push_info(format!(
                     "Unknown command: /{name}\nType /help to see available commands."
