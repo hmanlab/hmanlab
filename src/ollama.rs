@@ -21,8 +21,8 @@ pub struct Attachment {
 impl Attachment {
     /// Read a file and create an Attachment, auto-detecting media type.
     pub fn from_path(path: &std::path::Path) -> Result<Self> {
-        let data = std::fs::read(path)
-            .map_err(|e| anyhow!("Failed to read {}: {}", path.display(), e))?;
+        let data =
+            std::fs::read(path).map_err(|e| anyhow!("Failed to read {}: {}", path.display(), e))?;
 
         let media_type = mime_guess::from_path(path)
             .first()
@@ -35,7 +35,11 @@ impl Attachment {
             .unwrap_or("unknown")
             .to_string();
 
-        Ok(Self { media_type, data, filename })
+        Ok(Self {
+            media_type,
+            data,
+            filename,
+        })
     }
 
     /// Encode as data URL for API payload: "data:image/png;base64,..."

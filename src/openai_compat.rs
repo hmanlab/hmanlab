@@ -498,11 +498,19 @@ mod backfill_tests {
         // Mirrors a /load'd transcript: assistant turn emitted 2 calls,
         // followed by 2 tool messages with no tool_call_id.
         let mut msgs = vec![
-            ChatMessage { role: "user".into(), content: "go".into(), ..Default::default() },
+            ChatMessage {
+                role: "user".into(),
+                content: "go".into(),
+                ..Default::default()
+            },
             assistant_with_n_calls(2),
             tool_result("fn_0"),
             tool_result("fn_1"),
-            ChatMessage { role: "assistant".into(), content: "done".into(), ..Default::default() },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "done".into(),
+                ..Default::default()
+            },
         ];
         backfill_tool_call_ids(&mut msgs);
         assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_0"));
@@ -526,7 +534,11 @@ mod backfill_tests {
     #[test]
     fn assistant_without_tool_calls_skipped() {
         let mut msgs = vec![
-            ChatMessage { role: "assistant".into(), content: "hi".into(), ..Default::default() },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "hi".into(),
+                ..Default::default()
+            },
             tool_result("orphan"),
         ];
         backfill_tool_call_ids(&mut msgs);
