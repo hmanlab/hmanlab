@@ -82,6 +82,8 @@ impl App {
             Command::Telegram(sub) => self.handle_telegram(sub, tx),
             Command::Agents(sub) => self.handle_agents(sub, tx),
             Command::Ask { name, query } => self.handle_ask(name, query, tx),
+            Command::Attach(path) => self.handle_attach(path),
+            Command::Detach(arg) => self.handle_detach(arg),
             Command::Unknown(name) => {
                 self.push_info(format!(
                     "Unknown command: /{name}\nType /help to see available commands."
@@ -166,10 +168,16 @@ impl App {
                 model: self.model.clone(),
             });
         }
+        // Drain any /attach-queued media onto this user turn. Attachments
+        // are in-memory only (not persisted), so they ride along once and
+        // then disappear — re-attach per message if you want the model to
+        // see the same image again on a follow-up turn.
+        let attachments = std::mem::take(&mut self.pending_attachments);
         self.messages.push(ChatMessage {
             role: "user".into(),
             content: text,
             hidden,
+            attachments,
             ..Default::default()
         });
         self.messages.push(ChatMessage {

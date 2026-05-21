@@ -147,6 +147,18 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         desc: "manually invoke a specialist agent (run /agents on first)",
     },
     SlashCommand {
+        name: "attach",
+        aliases: &["image", "img"],
+        args: "<path>",
+        desc: "queue an image/file to send with the next message",
+    },
+    SlashCommand {
+        name: "detach",
+        aliases: &["unattach"],
+        args: "[name|all]",
+        desc: "drop a queued attachment (default: most recent)",
+    },
+    SlashCommand {
         name: "update",
         aliases: &["upgrade", "selfupdate"],
         args: "",

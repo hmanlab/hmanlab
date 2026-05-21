@@ -21,7 +21,7 @@ pub(in crate::ui) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
 
     // Title encodes input mode; border colour echoes it so the box state
     // is scannable from across the screen.
-    let (title, border_color) = if app.turn.is_generating() {
+    let (mut title, border_color) = if app.turn.is_generating() {
         (
             "▎ generating · Ctrl+C to cancel".to_string(),
             theme::color::WARNING,
@@ -39,6 +39,25 @@ pub(in crate::ui) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         ("▎ message".to_string(), theme::color::ACCENT)
     };
+
+    // Append a queued-attachments summary to the title so the user knows
+    // an image will ride along on the next send. Names are truncated to
+    // keep the title from blowing past the available width — full list
+    // is always visible in the chat log from the /attach confirmation.
+    if !app.pending_attachments.is_empty() {
+        let n = app.pending_attachments.len();
+        let names: Vec<String> = app
+            .pending_attachments
+            .iter()
+            .take(3)
+            .map(|a| a.filename.clone())
+            .collect();
+        let mut summary = names.join(", ");
+        if n > 3 {
+            summary.push_str(&format!(", +{} more", n - 3));
+        }
+        title.push_str(&format!(" · attached {n}: {summary}"));
+    }
 
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)

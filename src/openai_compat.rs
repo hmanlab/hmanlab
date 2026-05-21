@@ -77,10 +77,16 @@ impl Client {
     pub async fn stream_chat(
         &self,
         model: &str,
-        messages: Vec<ChatMessage>,
+        mut messages: Vec<ChatMessage>,
         tools: Option<Vec<Tool>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem>> + Send>>> {
         let url = format!("{}/chat/completions", self.base);
+        // Back-fill missing `tool_call_id`s on tool messages — needed
+        // when the history was reconstructed from a loaded session,
+        // which doesn't persist the per-request `call_<i>` ids. Strict
+        // providers (opencode, MiniMax) 400 without these on the
+        // first send after `/load`.
+        backfill_tool_call_ids(&mut messages);
         let oai_messages: Vec<OaiMessage> = messages.into_iter().map(OaiMessage::from).collect();
         let req = OaiRequest {
             model,
@@ -271,6 +277,42 @@ struct PartialToolCall {
     args: String,
 }
 
+/// Pair tool result messages back to their originating assistant
+/// `tool_calls` by position and stamp the matching `call_<i>` id. The
+/// outgoing serializer synthesises `call_0..call_N` for an assistant
+/// turn's `tool_calls`; strict OpenAI-compat providers (opencode,
+/// MiniMax) reject tool result messages that don't carry the same id.
+///
+/// Live agent turns set this id at the source via `ChatMessage::tool_result`,
+/// but loaded sessions can't — the DB doesn't store the synthesised id
+/// (it's a per-request artefact). This walks the history and fills any
+/// `None` tool_call_id positionally, leaving already-set ids alone.
+fn backfill_tool_call_ids(messages: &mut [ChatMessage]) {
+    let n = messages.len();
+    let mut i = 0;
+    while i < n {
+        if messages[i].role == "assistant" {
+            let num_calls = messages[i]
+                .tool_calls
+                .as_ref()
+                .map(|c| c.len())
+                .unwrap_or(0);
+            if num_calls > 0 {
+                let mut j = i + 1;
+                let mut k = 0;
+                while j < n && k < num_calls && messages[j].role == "tool" {
+                    if messages[j].tool_call_id.is_none() {
+                        messages[j].tool_call_id = Some(format!("call_{k}"));
+                    }
+                    j += 1;
+                    k += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
 fn finalize_calls(parts: Vec<PartialToolCall>) -> Vec<ToolCall> {
     parts
         .into_iter()
@@ -299,8 +341,13 @@ struct OaiRequest<'a> {
 #[derive(Serialize)]
 struct OaiMessage {
     role: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    content: String,
+    /// Either a plain string (text-only) or a content-parts array
+    /// (text + image_url) when the message has attachments. `None`
+    /// when the assistant emitted only tool_calls with no text — some
+    /// providers reject `content: ""` alongside tool_calls, so we omit
+    /// the field entirely in that case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -330,23 +377,34 @@ impl From<ChatMessage> for OaiMessage {
         // requires tool messages to carry tool_call_id, but the streaming
         // GLM endpoint is lenient enough to accept it without when paired
         // with the right `name`.
-        let tool_calls = m.tool_calls.map(|calls| {
+        let tool_calls = m.tool_calls.as_ref().map(|calls| {
             calls
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(i, tc)| OaiToolCallOut {
                     id: format!("call_{i}"),
                     kind: "function".into(),
                     function: OaiToolCallFnOut {
-                        name: tc.function.name,
+                        name: tc.function.name.clone(),
                         arguments: tc.function.arguments.to_string(),
                     },
                 })
                 .collect()
         });
+        // Multimodal-aware serialization: `to_api_content` returns either
+        // a plain string or a content-parts array depending on whether
+        // attachments are present. Omit the field entirely for empty
+        // text-only messages (assistant turns that emitted only
+        // tool_calls), since some providers reject `content: ""` next
+        // to tool_calls.
+        let content_val = m.to_api_content();
+        let content = match &content_val {
+            Value::String(s) if s.is_empty() => None,
+            _ => Some(content_val),
+        };
         OaiMessage {
             role: m.role,
-            content: m.content,
+            content,
             name: m.name,
             tool_calls,
             // Preserve the correlation id set by agent_loop_with on
@@ -402,4 +460,78 @@ struct OaiUsage {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+}
+
+#[cfg(test)]
+mod backfill_tests {
+    use super::*;
+    use crate::ollama::{ToolCall, ToolCallFunction};
+    use serde_json::Value;
+
+    fn assistant_with_n_calls(n: usize) -> ChatMessage {
+        let calls = (0..n)
+            .map(|i| ToolCall {
+                function: ToolCallFunction {
+                    name: format!("fn_{i}"),
+                    arguments: Value::Null,
+                },
+            })
+            .collect();
+        ChatMessage {
+            role: "assistant".into(),
+            tool_calls: Some(calls),
+            ..Default::default()
+        }
+    }
+
+    fn tool_result(name: &str) -> ChatMessage {
+        ChatMessage {
+            role: "tool".into(),
+            content: format!("result of {name}"),
+            name: Some(name.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn loaded_session_gets_call_ids_positionally() {
+        // Mirrors a /load'd transcript: assistant turn emitted 2 calls,
+        // followed by 2 tool messages with no tool_call_id.
+        let mut msgs = vec![
+            ChatMessage { role: "user".into(), content: "go".into(), ..Default::default() },
+            assistant_with_n_calls(2),
+            tool_result("fn_0"),
+            tool_result("fn_1"),
+            ChatMessage { role: "assistant".into(), content: "done".into(), ..Default::default() },
+        ];
+        backfill_tool_call_ids(&mut msgs);
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_0"));
+        assert_eq!(msgs[3].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn does_not_overwrite_existing_ids() {
+        let mut msgs = vec![
+            assistant_with_n_calls(1),
+            ChatMessage {
+                role: "tool".into(),
+                tool_call_id: Some("call_preserved".into()),
+                ..Default::default()
+            },
+        ];
+        backfill_tool_call_ids(&mut msgs);
+        assert_eq!(msgs[1].tool_call_id.as_deref(), Some("call_preserved"));
+    }
+
+    #[test]
+    fn assistant_without_tool_calls_skipped() {
+        let mut msgs = vec![
+            ChatMessage { role: "assistant".into(), content: "hi".into(), ..Default::default() },
+            tool_result("orphan"),
+        ];
+        backfill_tool_call_ids(&mut msgs);
+        // No preceding tool_calls → leave alone (the tool row is an
+        // orphan; the request would have failed earlier anyway).
+        assert!(msgs[1].tool_call_id.is_none());
+    }
 }
