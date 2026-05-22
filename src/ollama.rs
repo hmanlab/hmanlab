@@ -48,6 +48,14 @@ impl Attachment {
         format!("data:{};base64,{}", self.media_type, b64)
     }
 
+    /// Raw base64 (no `data:` prefix). Ollama's native `/api/chat`
+    /// wants `images: ["<base64>"]` on the message, not OpenAI-style
+    /// `image_url` content parts — without this, vision models like
+    /// llava / qwen2-vl never see the image.
+    pub fn to_base64(&self) -> String {
+        base64::engine::general_purpose::STANDARD.encode(&self.data)
+    }
+
     /// Human-readable size (e.g. "1.2 MB")
     pub fn size_display(&self) -> String {
         let bytes = self.data.len() as f64;
@@ -211,8 +219,13 @@ struct ChatRequest<'a> {
     tools: Option<&'a [Tool]>,
 }
 
-/// Message format sent to the API — uses `content` as either a plain string
-/// or a content-parts array (text + image_url) depending on attachments.
+/// Message format sent to Ollama's `/api/chat`. Ollama is NOT
+/// OpenAI-compatible for vision: it wants a plain-text `content`
+/// alongside a separate `images: ["<base64>"]` array on the message
+/// — content-parts arrays with `image_url` are silently dropped, so
+/// the model never sees the attachment. The OpenAI-compat path in
+/// `openai_compat.rs` uses a different shape (content parts) since
+/// that's what z.ai / OpenRouter / opencode actually want.
 #[derive(Serialize)]
 struct ApiMessage {
     role: String,
@@ -222,8 +235,12 @@ struct ApiMessage {
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ToolCall>>,
-    /// Either a string (text-only) or an array of content parts (multimodal)
-    content: Value,
+    content: String,
+    /// Raw base64 image bytes (no `data:` prefix). Omitted when the
+    /// message has no attachments so non-vision Ollama models don't see
+    /// a stray field.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<String>,
 }
 
 impl From<&ChatMessage> for ApiMessage {
@@ -233,7 +250,8 @@ impl From<&ChatMessage> for ApiMessage {
             name: msg.name.clone(),
             tool_call_id: msg.tool_call_id.clone(),
             tool_calls: msg.tool_calls.clone(),
-            content: msg.to_api_content(),
+            content: msg.content.clone(),
+            images: msg.attachments.iter().map(|a| a.to_base64()).collect(),
         }
     }
 }
