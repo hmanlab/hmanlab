@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-05-22
+
+### What's new
+- **Paste images directly from clipboard.** `Ctrl+V` (or `/paste`) now attaches whatever image is on your system clipboard — screenshot a window, switch to hmanlab, paste, send. Plain text on the clipboard still pastes into the input as you'd expect; hmanlab figures out which it is. Works on Linux (X11 + Wayland), macOS, and Windows.
+- **18 more Ollama Cloud models.** The model picker now lists the full Ollama Cloud catalog (21 models — DeepSeek v3.2 / v4, Qwen3-next, Kimi K2.6, MiniMax M2.x, Gemma 4, Gemini 3 Flash, Nemotron 3, and more), not just the three we knew were free a week ago. The Ollama Cloud free tier is GPU-time quota now, not per-model paywalls — heavy models like `deepseek-v4-pro` just burn quota faster.
+
+### Fixed
+- **Image attachments now actually reach Ollama vision models.** Previously, attaching an image (via `/attach` or paste) and sending to a local Ollama model — even a vision-capable one like `llava` or `qwen2-vl` — silently dropped the image: the model only saw your text. This also fixes the same bug on Ollama Cloud. Vision providers via BYOK (OpenRouter, z.ai, OpenCode) were never affected.
+
+[0.2.3]: https://github.com/hmanlab/hmanlab/compare/0.2.2...0.2.3
+
 ## [0.2.2] - 2026-05-22
 
 ### What's new
