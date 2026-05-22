@@ -7,7 +7,7 @@
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
-    widgets::{Clear, List, ListItem, Padding},
+    widgets::{Clear, List, ListItem, ListState, Padding},
     Frame,
 };
 
@@ -43,5 +43,10 @@ pub(in crate::ui) fn render_picker(f: &mut Frame, area: Rect, app: &App) {
     let list = List::new(items).block(
         theme::popup_block("select model — ↑↓ Enter Esc", false).padding(Padding::horizontal(1)),
     );
-    f.render_widget(list, area);
+    // Stateful render so ratatui auto-scrolls the viewport to keep the
+    // highlighted row in view. Fresh ListState each frame is fine —
+    // selected drives the scroll, the prior offset doesn't matter.
+    let mut state = ListState::default();
+    state.select(Some(app.model_picker.index));
+    f.render_stateful_widget(list, area, &mut state);
 }
