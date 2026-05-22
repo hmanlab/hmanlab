@@ -64,20 +64,44 @@ pub const OPENCODE_DEFAULT_MODEL: &str = "glm-5.1";
 /// (native /api/chat), but reached over HTTPS with a Bearer-auth API key
 /// generated at https://ollama.com/settings/keys.
 ///
-/// Free-tier catalog as of 2026-05-16, verified by direct API probe: most
-/// Ollama Cloud models (glm-5.1, glm-5, deepseek-*, kimi, minimax) return
-/// `403: this model requires a subscription`. The three below are the only
-/// chat-capable ones a fresh key can actually call without upgrading. We
-/// keep the list narrow so the picker never lies about what works — paid
-/// models can be added manually by editing `~/.config/hmanlab/config.json`
-/// once a subscription is in place.
+/// Full cloud catalog as of 2026-05-22, scraped from
+/// https://ollama.com/search?c=cloud. Every entry is *technically* callable
+/// from a free key — Ollama Cloud's tier model is GPU-time quota (resets
+/// every 5 hours on Free, 50x larger on Pro $20/mo, 5x that again on Max
+/// $100/mo), not per-model paywalls. Heavy models (level 3-4: deepseek-v4-*,
+/// glm-5*, kimi, minimax, qwen3-next) burn through free quota in a few
+/// prompts; light models (level 1-2: gpt-oss:20b, gemma4, ministral-3,
+/// nemotron-3-nano, qwen3.5) stretch much further. We list all of them so
+/// the picker reflects reality — quota errors surface naturally on use.
 ///
 /// Note: the API accepts both `glm-4.7` and `glm-4.7:cloud` — the `:cloud`
 /// suffix is optional. We use bare slugs so the picker display
 /// (`[ollama-cloud] glm-4.7`) reads cleanly.
 pub const OLLAMA_CLOUD_PROVIDER: &str = "ollama-cloud";
 pub const OLLAMA_CLOUD_BASE: &str = "https://ollama.com";
-pub const OLLAMA_CLOUD_MODELS: &[&str] = &["glm-4.7", "gpt-oss:120b-cloud", "qwen3-coder-next"];
+pub const OLLAMA_CLOUD_MODELS: &[&str] = &[
+    "deepseek-v3.2",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "devstral-small-2",
+    "gemini-3-flash-preview",
+    "gemma4",
+    "glm-4.7",
+    "glm-5",
+    "glm-5.1",
+    "gpt-oss:120b-cloud",
+    "kimi-k2.6",
+    "minimax-m2.1",
+    "minimax-m2.5",
+    "minimax-m2.7",
+    "ministral-3",
+    "nemotron-3-nano",
+    "nemotron-3-super",
+    "qwen3.5",
+    "qwen3-coder-next",
+    "qwen3-next",
+    "rnj-1",
+];
 pub const OLLAMA_CLOUD_DEFAULT_MODEL: &str = "glm-4.7";
 
 /// OpenRouter — meta-provider that routes to many model vendors behind one
